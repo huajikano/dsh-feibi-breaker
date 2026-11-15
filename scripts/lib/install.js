@@ -29,7 +29,7 @@ export const PLUGIN_LABEL = '菲比破限'
 /**
  * Ids this plugin supersedes. **Empty on purpose.**
  *
- * This plugin coexists with `dsh-gatekeeper`, `fujiang-armor` and any other
+ * This plugin coexists with `dsh-gatekeeper` and any other
  * guard: installing it adds one Loader row and touches nothing else. Earlier
  * builds of 菲比破限 carried the merged predecessors' ids here, which made an
  * install silently unmount another plugin the user had chosen to keep. A public

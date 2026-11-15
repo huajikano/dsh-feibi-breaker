@@ -2,7 +2,7 @@
 #
 # 一个插件两半：破甲（提示词塑形）+ 提交前拦截。
 # 本脚本只写入 feibi-breaker 自己的一行，不改动、不删除其他插件
-# （dsh-gatekeeper / fujiang-armor 等）的挂载行与依赖。
+# （dsh-gatekeeper 等）的挂载行与依赖。
 
 [CmdletBinding()]
 param(
@@ -115,7 +115,7 @@ if ($DryRun) {
         $bak = "$patchPath.before-$pluginId.bak"
         if ((Test-Path $patchPath) -and -not (Test-Path $bak)) { Copy-Item -LiteralPath $patchPath -Destination $bak -Force }
 
-        # 不清理其他插件的挂载行：与 dsh-gatekeeper / fujiang-armor 共存是本插件的
+        # 不清理其他插件的挂载行：与 dsh-gatekeeper 共存是本插件的
         # 明确契约。只有本插件自己的一行会被写入或更新（见下）。
         $cleaned = $before
         $cleaned = $cleaned.TrimEnd()
