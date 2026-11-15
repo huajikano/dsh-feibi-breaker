@@ -1,0 +1,5 @@
+# 让 checkout 的行为可预测：Windows 上脚本按 CRLF 落盘，二进制资产原样保留。
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.bin binary

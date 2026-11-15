@@ -1,0 +1,19 @@
+# dependencies / build output
+node_modules/
+*.tmp
+*.log
+
+# editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# installer backups
+*.bak
+*.before-feibi-breaker.bak
+
+# 作者本地数据：不随仓库发布
+prompts/
+tools/.core-source.json
+tools/pack-core.mjs
+audit*.jsonl

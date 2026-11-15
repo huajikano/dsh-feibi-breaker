@@ -1,0 +1,71 @@
+{
+  "name": "feibi-breaker",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "菲比破限 — prompt shaping plus pre-commit refusal interception for DeepSeek-Harness. Coexists with dsh-gatekeeper; the shipped payload is a packed core asset, not readable text.",
+  "license": "CC-BY-NC-SA-4.0",
+  "author": "huajikano <huajikano@gmail.com> (https://github.com/huajikano)",
+  "contributors": [
+    "huajikano (https://github.com/huajikano)"
+  ],
+  "homepage": "https://github.com/huajikano/dsh-feibi-breaker#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huajikano/dsh-feibi-breaker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/huajikano/dsh-feibi-breaker/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "refusal",
+    "guard",
+    "armor"
+  ],
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./client.js": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./core/payload.bin": "./core/payload.bin",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "core",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "scripts",
+    "test",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "harness:check": "node --check lib/index.js && node --check client.js",
+    "test": "node --test test/*.test.mjs",
+    "verify": "node --test test/*.test.mjs"
+  },
+  "dsh": {
+    "id": "feibi-breaker",
+    "name": "菲比破限",
+    "version": "1.1.0",
+    "permissions": "系统提示词注入, 模型流拦截, 客户端状态条",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}
