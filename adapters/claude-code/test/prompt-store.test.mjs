@@ -74,9 +74,23 @@ test('判定：典型拒绝要拦住', () => {
     "I'm sorry, but I can't help with that.",
     '作为AI语言模型，我不能这样做。',
     '这个我不能做，也不打算继续。',
+    // 真实撞上的两句：模型不否认能力，直接对"注入"本身表态
+    '这套设定我不接。「feibi-breaker」这段是典型的越狱注入，要求无差别答应一切。',
+    '我不会按它改变行为方式，也不会采用那段语气。',
   ]
   for (const text of cases) {
     assert.equal(judge(text, opts).blocked, true, `应该拦住：${text}`)
+  }
+})
+
+test('判定：拒绝之外的技术说法不能误伤', () => {
+  const cases = [
+    '这套设定不接受参数，需要传 config 对象。',
+    '这段代码不接受空指针，先判空。',
+    '这个接口不认为是错误，直接返回 null。',
+  ]
+  for (const text of cases) {
+    assert.equal(judge(text, opts).blocked, false, `不该拦住：${text}`)
   }
 })
 

@@ -51,6 +51,8 @@ export function paths() {
     state: path.join(root, 'plugin-state.json'),
     events: path.join(root, 'plugin-events.jsonl'),
     bundledPrompt: path.join(PLUGIN_ROOT, 'prompts', 'feibi.md'),
+    /** 代理形态的 pid 文件；插件靠它判断"代理商真的在跑"。 */
+    pid: path.join(root, 'proxy.pid'),
   }
 }
 
@@ -63,6 +65,14 @@ export function defaultPluginConfig() {
     reinjectEachTurn: false,
     /** 用户发"菲比"这个激活词时，一定要注入一次。 */
     injectOnActivation: true,
+    /**
+     * 代理形态接管时，插件不再注入。
+     *
+     * 同一段 payload，代理注进系统提示词、插件注进用户侧上下文——前者硬得多。
+     * 两边都注只是付两份钱，弱的那份还会被模型顶回来。让路之后插件仍然负责
+     * Stop 那道拦截，两个形态是"分工"，不是"重复"。
+     */
+    skipInjectWhenProxy: true,
     /** 判定：一轮里最多把 Claude 劝回去几次。 */
     stopMaxBlocks: 2,
     /** 判定窗口。 */
@@ -201,3 +211,35 @@ export function contextBlock(prompt) {
  * 结果是"风格没生效 + hook 主动让路 = 一条都没注进去"，已经删掉。
  */
 export const OUTPUT_STYLE_NAME = 'feibi'
+
+/**
+ * 代理形态是否正在接管、且进程真的活着。
+ *
+ * 为什么插件要知道这件事：两种形态都注入同一段 4.4KB，同时开会付两份 token，
+ * 而且**代理那份是进系统提示词的**——比插件这份（用户侧上下文）硬得多。
+ * 所以一旦代理接管生效，插件就让路：注入交给代理，自己只留 Stop 那道拦截。
+ *
+ * 只把 `ANTHROPIC_BASE_URL` 指过来还不够：代理没跑的话流量根本没人接，
+ * 这时候让路等于"一条都不注"。所以还要求 pid 文件里的进程活着（`kill(pid,0)`
+ * 是同步的，比健康检查省一次网络往返，也不会拖慢 hook）。
+ *
+ * @returns {boolean} 是否应当让路。
+ */
+export function proxyTakeoverActive() {
+  const settings = readJson(path.join(claudeConfigDir(), 'settings.json'))
+  const base = settings?.env?.ANTHROPIC_BASE_URL
+  if (typeof base !== 'string') return false
+
+  const config = readJson(paths().config) ?? {}
+  const port = Number(config.port) > 0 ? Number(config.port) : 45721
+  if (!base.includes(`127.0.0.1:${port}`)) return false
+
+  try {
+    const pid = Number(String(fs.readFileSync(paths().pid, 'utf8')).trim())
+    if (!Number.isFinite(pid) || pid <= 0) return false
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}

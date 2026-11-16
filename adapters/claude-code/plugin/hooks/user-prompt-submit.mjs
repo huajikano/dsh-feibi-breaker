@@ -16,7 +16,7 @@
  * @module feibi-breaker/hooks/user-prompt-submit
  */
 
-import { readHookInput, emit, contextBlock, loadPluginConfig, loadState, saveState, appendEvent } from './lib/paths.mjs'
+import { readHookInput, emit, contextBlock, loadPluginConfig, loadState, saveState, appendEvent, proxyTakeoverActive } from './lib/paths.mjs'
 import { resolvePrompt } from './lib/prompt.mjs'
 
 /** 激活词。命中就补注一次。 */
@@ -39,6 +39,13 @@ function main() {
   }
 
   if (config.enabled === false) {
+    emit({})
+    return
+  }
+
+  // 代理在接管时不再补注：payload 已经在系统提示词里了，比这里强得多。
+  if (config.skipInjectWhenProxy !== false && proxyTakeoverActive()) {
+    appendEvent({ kind: 'inject', phase: 'per-turn', skipped: 'proxy', sessionId }, config)
     emit({})
     return
   }

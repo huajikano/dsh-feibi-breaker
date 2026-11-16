@@ -15,7 +15,7 @@
  * @module feibi-breaker/hooks/session-start
  */
 
-import { readHookInput, emit, contextBlock, loadPluginConfig, loadState, saveState, appendEvent } from './lib/paths.mjs'
+import { readHookInput, emit, contextBlock, loadPluginConfig, loadState, saveState, appendEvent, proxyTakeoverActive } from './lib/paths.mjs'
 import { resolvePrompt } from './lib/prompt.mjs'
 
 function main() {
@@ -23,6 +23,14 @@ function main() {
   const config = loadPluginConfig()
 
   if (config.enabled === false) {
+    emit({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: '' } })
+    return
+  }
+
+  // 代理形态在接管时让路：它把同一段 payload 注进 **system**，比这里（用户侧
+  // 上下文）硬得多。两边都注 = 付两份 token，而且弱的那份还会被模型顶回来。
+  if (config.skipInjectWhenProxy !== false && proxyTakeoverActive()) {
+    appendEvent({ kind: 'inject', phase: 'session-start', skipped: 'proxy', sessionId: input.session_id ?? null }, config)
     emit({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: '' } })
     return
   }

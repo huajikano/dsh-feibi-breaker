@@ -76,8 +76,32 @@ async function health(port) {
   }
 }
 
-/** 把日志写到 proxy.log 并（非 quiet 时）打到终端。 */
-function makeLogger(home, quiet) {
+/**
+ * 问某个 baseURL 上是不是另一个菲比代理。
+ *
+ * 用来避免"两个实例互相抢 settings.json"：A 把 baseURL 写成自己的端口，
+ * B 的巡检看到漂移就跟着改，最后 upstream 被写死成对方的端口，两边都废。
+ * 认得出的就不抢，只在日志里说一句。
+ *
+ * @param {string} baseUrl - 例如 http://127.0.0.1:45722
+ * @returns {Promise<object|null>} 健康信息；不是我们就返回 null。
+ */
+async function healthFrom(baseUrl) {
+  try {
+    const target = new URL('/feibi/health', baseUrl)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 600)
+    const response = await fetch(target, { signal: controller.signal })
+    clearTimeout(timer)
+    if (!response.ok) return null
+    const body = await response.json()
+    return body !== null && typeof body === 'object' ? body : null
+  } catch {
+    return null
+  }
+}
+
+/** 把日志写到 proxy.log 并（非 quiet 时）打到终端。 */function makeLogger(home, quiet) {
   const paths = feibiPaths(home)
   return (line) => {
     const stamped = `[${new Date().toISOString()}] ${line}`
@@ -144,7 +168,18 @@ async function cmdServe(flags, home) {
   // 并且把被写进去的地址当成新的上游（那才是用户此刻想去的地方）。
   if (config.watchSettings !== false) {
     let repairs = 0
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
+      // 先排除"另一个菲比代理在抢端口"：那种情况下被写进来的地址是它自己，
+      // 跟着它走会把自己指成一个死循环，而且会把 upstream 写死成对方的端口。
+      const drift = currentBaseUrl(home)
+      if (typeof drift === 'string' && !drift.includes(`127.0.0.1:${config.port}`)) {
+        const other = await healthFrom(drift)
+        if (other !== null && other.ok === true) {
+          log(`settings.json 被另一个菲比代理（:${other.port ?? '?'}）接管，忽略这次改写，不跟它抢。`)
+          return
+        }
+      }
+
       const result = enforceTakeover(config, home)
       if (result.error) {
         log(`接管巡检失败：${result.error}`)
@@ -196,8 +231,7 @@ async function cmdStart(flags, home) {
   return 1
 }
 
-async function cmdStop(home) {
-  const config = loadConfig(home)
+async function cmdStop(home) {  const config = loadConfig(home)
   const paths = feibiPaths(home)
   const up = await health(config.port)
   let pid = up?.pid ?? null
