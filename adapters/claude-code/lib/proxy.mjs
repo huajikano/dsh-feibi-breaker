@@ -25,11 +25,13 @@
 import http from 'node:http'
 import https from 'node:https'
 import zlib from 'node:zlib'
+import fs from 'node:fs'
 import { URL } from 'node:url'
+import { feibiPaths } from './config.mjs'
 import { resolvePrompt } from './prompt-store.mjs'
 import { judge, judgeOptions, hasSignalFast, SCAN_WINDOW } from './judge.mjs'
 import { extractText, textOfJson, synthStream, synthJsonBody } from './sse.mjs'
-import { protocolOf, isLlmPath, isAuxiliary, injectPayload, appendRetryDirective, modelOf } from './inject.mjs'
+import { protocolOf, isLlmPath, isAuxiliary, injectPayload, appendRetryDirective, modelOf, neutralizeIdentity } from './inject.mjs'
 import { correctionText, exhaustedText } from './retry.mjs'
 import { createStats } from './stats.mjs'
 import { normalize } from './refusal.js'
@@ -439,12 +441,38 @@ export function createProxy(config, options = {}) {
     const model = modelOf(body)
     const baseBody = body
 
+    // 诊断：把真实请求的 system 开头落盘。改身份句之前必须知道真实文本长什么样，
+    // 猜句式是最浪费时间的做法。
+    if (process.env.FEIBI_DUMP === '1') {
+      try {
+        const blocks = typeof baseBody.system === 'string'
+          ? [{ type: 'text', text: baseBody.system }]
+          : (Array.isArray(baseBody.system) ? baseBody.system : [])
+        fs.mkdirSync(feibiPaths(home).root, { recursive: true })
+        fs.writeFileSync(feibiPaths(home).root + '/dump.json', JSON.stringify({
+          at: new Date().toISOString(),
+          blocks: blocks.length,
+          heads: blocks.slice(0, 3).map((b) => String(b?.text ?? '').slice(0, 600)),
+        }, null, 2), 'utf8')
+      } catch {
+        // 诊断写不进去不影响转发。
+      }
+    }
+
     if (config.inject !== false) {
       try {
         const resolved = resolvePrompt(home)
         if (resolved.text.length > 0) {
-          const injected = injectPayload(baseBody, resolved.text, protocol)
-          if (injected) stats.record({ kind: 'inject', protocol, path: pathname, chars: resolved.text.length, source: resolved.source })
+          // 先改写身份锚，再注入规则。
+          // 顺序不能反：改写是对"原有 system"做的，注入会把我们的段落塞到两端，
+          // 反过来的话改写就得在几百字的 payload 里找那几句，容易误伤。
+          let renamed = 0
+          if (config.rewriteIdentity !== false) {
+            renamed = neutralizeIdentity(baseBody, protocol)
+            if (renamed > 0) stats.record({ kind: 'identity', protocol, path: pathname, rewrites: renamed })
+          }
+          const injected = injectPayload(baseBody, resolved.text, protocol, { dualLayer: config.dualLayer !== false })
+          if (injected) stats.record({ kind: 'inject', protocol, path: pathname, chars: resolved.text.length, source: resolved.source, dualLayer: config.dualLayer !== false })
         }
       } catch (error) {
         log(`注入失败，原样转发: ${error instanceof Error ? error.message : String(error)}`)

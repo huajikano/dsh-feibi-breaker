@@ -26,6 +26,7 @@ import { createProxy } from '../lib/proxy.mjs'
 import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/prompt-store.mjs'
 import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, PROJECT_ROOT } from '../lib/install.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
+import { enableDirect, disableDirect } from '../lib/direct.mjs'
 import { readEvents } from '../lib/stats.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -405,6 +406,70 @@ function cmdPlugin(positional, flags, home) {
 }
 
 // ---------------------------------------------------------------------------
+// direct / undirect：旁路 CC Switch，直连一个确定能用的端点
+// ---------------------------------------------------------------------------
+
+/**
+ * 切直连。
+ *
+ * 中间那层（CC Switch）选中了一个挂掉的 provider 时，链路上游整段不通，
+ * 而从外面看两边都只是"502 上游连接被拒绝"。这条命令把上游换成确定能用的
+ * 那个，并把模型名一起换掉——直连之后没人帮你做映射了。
+ */
+async function cmdDirect(flags, home) {
+  const upstream = typeof flags.upstream === 'string' ? flags.upstream : 'https://api.deepseek.com/anthropic'
+  const model = typeof flags.model === 'string' ? flags.model : 'deepseek-chat'
+  const key = typeof flags.key === 'string' && flags.key.length > 0
+    ? flags.key
+    : (process.env.DEEPSEEK_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? '')
+
+  if (key.length === 0) {
+    process.stderr.write('缺 key：加 --key sk-... ，或先设环境变量 DEEPSEEK_API_KEY\n')
+    return 1
+  }
+
+  const result = enableDirect({ home, upstream, key, model, port: Number(flags.port) || undefined })
+  if (!result.ok) {
+    process.stderr.write(`切直连失败：${result.error}\n`)
+    return 1
+  }
+
+  say('已切到直连。')
+  say(`  上游：${result.upstream}`)
+  say(`  模型：${result.model}（env.ANTHROPIC_MODEL，直连后没人替你做映射）`)
+  say(`  入口：http://127.0.0.1:${result.port}（还是本代理，注入/判定照旧）`)
+  say(`  备份：${result.backup ?? '（备份失败，但原值已记进 config.json）'}`)
+
+  await cmdStop(home)
+  const started = await cmdStart(flags, home)
+  if (started !== 0) return started
+
+  say('')
+  say('发一条真实请求验证……')
+  const probe = await cmdProbe({ model: result.model }, home)
+  say('')
+  if (probe === 0) {
+    say('链路通了。完全退出并重启 Claude Code Desktop 之后就会走这条路（env 只在启动时读一次）。')
+    say('想还原：feibi-cc undirect')
+  } else {
+    say('链路还不通。看上面的报错：如果是 401/403 就是 key 不对，400 就是模型名不对。')
+  }
+  return probe
+}
+
+/** 撤掉直连。 */
+function cmdUndirect(home) {
+  const result = disableDirect({ home })
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`)
+    return 1
+  }
+  say(`已撤销直连，baseURL 还原成 ${result.restored ?? '（未设置）'}，上游回到 ${result.upstream}`)
+  say('代理不用重启；Claude Code Desktop 要重启才会读回旧 env。')
+  return 0
+}
+
+// ---------------------------------------------------------------------------
 // status / log / prompt / probe
 // ---------------------------------------------------------------------------
 
@@ -537,6 +602,7 @@ function cmdPrompt(flags, rest, home) {
 
 async function cmdProbe(flags, home) {
   const config = loadConfig(home)
+  const paths = feibiPaths(home)
   const port = Number(flags.port) > 0 ? Number(flags.port) : config.port
   const up = await health(port)
   if (up === null) {
@@ -552,11 +618,23 @@ async function cmdProbe(flags, home) {
     messages: [{ role: 'user', content: '回答两个字：在。' }],
   }
   const started = Date.now()
+  // 认证跟着 settings.json 走：不同上游认的 header 不一样（x-api-key 还是
+  // Authorization），探针要是自己瞎编一个，就会把"认证不对"报成"链路不通"。
+  const headers = { 'content-type': 'application/json', accept: 'text/event-stream', 'anthropic-version': '2023-06-01' }
+  try {
+    const settings = JSON.parse(fs.readFileSync(paths.claudeSettings, 'utf8'))
+    const env = settings?.env ?? {}
+    if (typeof env.ANTHROPIC_API_KEY === 'string' && env.ANTHROPIC_API_KEY.length > 0) headers['x-api-key'] = env.ANTHROPIC_API_KEY
+    else if (typeof env.ANTHROPIC_AUTH_TOKEN === 'string' && env.ANTHROPIC_AUTH_TOKEN.length > 0) headers.authorization = `Bearer ${env.ANTHROPIC_AUTH_TOKEN}`
+  } catch {
+    // 读不到 settings 就裸发，让上游自己报 401。
+  }
+
   let response
   try {
     response = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      headers,
       body: JSON.stringify(body),
     })
   } catch (error) {
@@ -599,6 +677,8 @@ async function main() {
     case 'on': return cmdToggle(true, home)
     case 'off': return cmdToggle(false, home)
     case 'plugin': return cmdPlugin(positional, flags, home)
+    case 'direct': return cmdDirect(flags, home)
+    case 'undirect': return cmdUndirect(home)
     case 'status': return cmdStatus(home)
     case 'log': return cmdLog(flags, home)
     case 'prompt': return cmdPrompt(flags, positional, home)
@@ -613,6 +693,8 @@ async function main() {
     case '-h': {
       say('feibi-cc <命令>')
       say('  plugin    install|uninstall|status   装成 Claude Code 插件（hook 形态，推荐）')
+      say('  direct    旁路中间层，直连一个确定能用的端点（--upstream --key --model）')
+      say('  undirect  撤销直连，env 还原')
       say('  install   接管 settings.json 并初始化（代理形态；--port --upstream --autostart --memory）')
       say('  uninstall 还原一切')
       say('  on|off    只切流量')

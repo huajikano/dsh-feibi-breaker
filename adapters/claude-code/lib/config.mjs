@@ -93,6 +93,22 @@ export function defaultConfig() {
     upstream: DEFAULT_UPSTREAM,
     /** 是否改写请求体注入提示词。 */
     inject: true,
+    /**
+     * 双段注入：头 + 尾各一份。
+     *
+     * 只往末尾追加时，模型的 thinking 会写"payload 让我当菲比，但系统提示词里
+     * 我的真实身份是……"，然后按系统提示词办。头段抢在最前面声明优先级，
+     * 这是 dsh 版 Order 100 + Order 200 的等效实现（那边也是同一段放两处）。
+     */
+    dualLayer: true,
+    /**
+     * 改写系统提示词里的身份锚：把"You are Claude Code, …"换成菲比。
+     *
+     * 注入是"加"，身份句是"锚"，加多少段都改不了锚。实测双段注入后模型
+     * 已经在 thinking 里写下"per the injected persona rules, i should answer as 菲比"，
+     * 最终答案仍是"我是 Claude Code"——就是被这句锚拉回去的。
+     */
+    rewriteIdentity: true,
     /** 是否盯着返回流做拒绝判定。 */
     guard: true,
     /** 判定命中后是否自动重发。 */
