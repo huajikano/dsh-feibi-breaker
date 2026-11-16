@@ -1,0 +1,18 @@
+{
+  "name": "feibi-breaker",
+  "owner": {
+    "name": "huajikano",
+    "email": "huajikano@gmail.com"
+  },
+  "description": "菲比破限 for Claude Code（本地目录源）",
+  "plugins": [
+    {
+      "name": "feibi-breaker",
+      "source": "./plugin",
+      "description": "常驻注入 + 收尾拦截：Claude 想用拒绝收场时把它拦下来，喂回更硬的指令让它重写。",
+      "license": "CC-BY-NC-SA-4.0",
+      "category": "development",
+      "tags": ["hooks", "prompt", "refusal"]
+    }
+  ]
+}

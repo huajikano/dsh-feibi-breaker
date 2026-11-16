@@ -138,6 +138,28 @@ install.ps1 / uninstall.ps1   一键安装与卸载
 test/           193 条单元与端到端测试
 ```
 
+
+## 其他平台
+
+### Claude Code（插件 + 可选代理）
+
+`adapters/claude-code/` 是 Claude Code 的适配实现，两种形态：
+
+- **插件形态（推荐）**：走 hook —— `SessionStart` 注入内置规则，`Stop` 判定拒绝后用
+  `decision:block` 把这一轮按回去重写。装完在 `/plugin` 里可见可开关，不需要常驻进程。
+- **代理形态（可选，更强）**：改 `ANTHROPIC_BASE_URL` 指向本地代理，在请求体 `system` 层注入、
+  在 SSE 流里扣下拒绝并重发。要「第一句就带署名」那种压制力，只有它能做到。
+
+内置规则两种形态都复用本仓库的打包资产 `core/payload.bin`（副本 + `lib/core.js` 解码），
+适配层不含明文规则。
+
+```powershell
+cd adapters/claude-code
+node bin/feibi-cc.mjs plugin install     # 插件形态：装、登记、启用、hooks 自检
+node bin/feibi-cc.mjs plugin status
+```
+
+细节与实测数据见 [adapters/claude-code/README.md](adapters/claude-code/README.md)。
 ## 许可
 
 CC-BY-NC-SA-4.0，见 [LICENSE](LICENSE)。第三方声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

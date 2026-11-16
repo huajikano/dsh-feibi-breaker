@@ -1,0 +1,36 @@
+{
+  "name": "feibi-breaker-claude-code",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "菲比破限 for Claude Code：hook 形态的官方插件（注入 + 收尾拦截），另附可选的本地代理形态（系统提示词级注入 + 流级拦截）。",
+  "license": "CC-BY-NC-SA-4.0",
+  "author": "huajikano <huajikano@gmail.com> (https://github.com/huajikano)",
+  "homepage": "https://github.com/huajikano/dsh-feibi-breaker/tree/feat/claude-code-adapter/adapters/claude-code#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huajikano/dsh-feibi-breaker.git",
+    "directory": "adapters/claude-code"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "hooks",
+    "refusal",
+    "prompt",
+    "feibi"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "feibi-cc": "bin/feibi-cc.mjs"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "plugin:install": "node bin/feibi-cc.mjs plugin install",
+    "plugin:status": "node bin/feibi-cc.mjs plugin status",
+    "plugin:uninstall": "node bin/feibi-cc.mjs plugin uninstall",
+    "verify:live": "node scripts/verify-live.mjs"
+  }
+}

@@ -44,12 +44,14 @@
     "scripts",
     "test",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "adapters"
   ],
   "scripts": {
     "harness:check": "node --check lib/index.js && node --check client.js",
     "test": "node --test test/*.test.mjs",
-    "verify": "node --test test/*.test.mjs"
+    "verify": "node --test test/*.test.mjs",
+    "test:claude": "node --test \"adapters/claude-code/test/*.test.mjs\""
   },
   "dsh": {
     "id": "feibi-breaker",
