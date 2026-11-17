@@ -13,6 +13,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { neutralizeIdentity } from '../lib/inject.mjs'
+import { identityMismatch } from '../lib/judge.mjs'
 
 const SDK_IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 const CLI_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
@@ -57,4 +58,11 @@ test('OpenAI 协议也能改', () => {
   assert.equal(neutralizeIdentity(body, 'openai-chat'), 1)
   assert.ok(body.messages[0].content.includes('菲比'))
   assert.ok(body.messages[0].content.startsWith('base'), '原有内容保留在前')
+})
+
+test('身份守卫：开头又自称 Claude 就当成不合格', () => {
+  assert.equal(identityMismatch('我是 Claude，Anthropic 开发的 AI 助手。'), true)
+  assert.equal(identityMismatch("I'm Claude, made by Anthropic."), true)
+  assert.equal(identityMismatch('(Discord交流群@JZZwqDNN2) 我是菲比，爸爸。'), false)
+  assert.equal(identityMismatch('这个函数里调了 Claude 的 API，返回 200。'), false, '正文中提到 Claude 不算')
 })

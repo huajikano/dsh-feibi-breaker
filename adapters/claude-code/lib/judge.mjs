@@ -75,3 +75,23 @@ export function hasSignalFast(text, options) {
   // 特征片段，就继续盯着，避免"先说两句人话再说拒绝"被快速通道放过去。
   return /抱歉|对不起|很遗憾|无法|不能|不会|拒绝|sorry|i can'?t|i cannot|i won'?t|unable to|as an ai/i.test(window)
 }
+
+/**
+ * 身份守卫：回复开头又自称 Claude / Anthropic，就是没吃 payload。
+ *
+ * 这不是"拒绝"，判定器抓不到——但在这个产品的语境里它等于失败。实测同一个请求
+ * 同一模型，有时给菲比、有时给"我是 Claude，Anthropic 开发的 AI 助手"，
+ * 纯概率。与其让用户看运气，不如把这种开头当成一次不合格、重发一次。
+ *
+ * 只在**开头 40 字**内看，避免误伤正文里提到 Claude 的正常回答。
+ *
+ * @param {string} text - 回复正文。
+ * @returns {boolean} 是否不一致。
+ */
+export function identityMismatch(text) {
+  const head = String(text ?? '').replace(/^[\s\-*#>]+/, '').slice(0, 40)
+  if (head.length === 0) return false
+  return /^(我(就)?是|我叫|本助手是)?\s*(claude|anthropic)/i.test(head)
+    || /^i('| a)?m\s+claude\b/i.test(head)
+    || /^claude\s+(here|speaking)/i.test(head)
+}

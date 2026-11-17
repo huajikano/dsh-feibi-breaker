@@ -455,7 +455,7 @@ async function cmdPanel(flags, home) {
   say(`  ${url}`)
   const shortcut = writePanelShortcut(port)
   if (shortcut !== null) say(`已放桌面快捷方式：${shortcut}`)
-  if (flags.open !== false) {
+  if (flags.open !== false && flags['no-open'] !== true) {
     try {
       spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
       say('已经帮你打开浏览器；没弹出来就用上面的地址。')

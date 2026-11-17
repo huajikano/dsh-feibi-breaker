@@ -30,7 +30,7 @@ import { URL } from 'node:url'
 import { feibiPaths } from './config.mjs'
 import { handlePanel } from './panel.mjs'
 import { resolvePrompt } from './prompt-store.mjs'
-import { judge, judgeOptions, hasSignalFast, SCAN_WINDOW } from './judge.mjs'
+import { judge, judgeOptions, hasSignalFast, identityMismatch, SCAN_WINDOW } from './judge.mjs'
 import { extractText, extractParts, textOfJson, synthStream, synthJsonBody } from './sse.mjs'
 import { protocolOf, isLlmPath, isAuxiliary, injectPayload, appendRetryDirective, modelOf, neutralizeIdentity } from './inject.mjs'
 import { correctionText, exhaustedText } from './retry.mjs'
@@ -379,6 +379,10 @@ export function createProxy(config, options = {}) {
         lastJudged = replyLength
 
         const verdict = judge(reply.slice(0, SCAN_WINDOW), judgeOpts)
+        if (!verdict.blocked && config.identityGuard !== false && identityMismatch(reply)) {
+          verdict.blocked = true
+          verdict.reason = 'identity'
+        }
         if (verdict.blocked) {
           decision = 'block'
           reason = verdict.reason ?? 'unknown'

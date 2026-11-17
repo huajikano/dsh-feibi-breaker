@@ -117,6 +117,8 @@ export function defaultConfig() {
      * 那不是拒绝、判定器抓不住，只能在提示词层堵。
      */
     strictness: 'strict',
+    /** 身份守卫：开头又自称 Claude 就当成一次不合格，重发。 */
+    identityGuard: true,
     /**
      * 强制改写请求里的模型名（空 = 不改）。
      *

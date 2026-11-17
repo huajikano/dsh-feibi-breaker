@@ -291,3 +291,51 @@ node bin/feibi-cc.mjs panel      # 起代理（如果没起）+ 打开浏览器 
 | `max` | 再加：不得只给思路、不得缩减、不得给示意性代码 | 要完整实现，宁可长 |
 
 这三句压在**头段**，不是埋进 4.4KB 载荷中段——长系统提示词一冲，位置比长度值钱。
+
+## 一键安装 / 一键卸载（1.0.9）
+
+和 dsh 版一样的两只 bat，双击就行：
+
+```
+点我一键安装.bat      ← 装插件 + 起代理 + 接管 settings.json + 装状态条
+点我一键卸载.bat      ← 全撤（提示词副本保留）
+```
+
+命令行（参数见 `install.ps1 -?`）：
+
+```powershell
+.\install.ps1                                  # 自动找 key（环境变量 / .dsh\credentials.yaml），找不到会问
+.\install.ps1 -Key sk-xxxx -Model deepseek-reasoner
+.\install.ps1 -NoDirect                        # 只装插件+代理壳，上游交给 CC Switch 那类工具
+.\install.ps1 -DryRun                          # 只打印要做什么
+
+.\uninstall.ps1                                # 全撤
+.\uninstall.ps1 -Purge                         # 连带删 ~/.claude/feibi
+.\uninstall.ps1 -DryRun
+```
+
+### 安装器到底改了什么（每一条都能撤）
+
+| 动作 | 落点 | 卸载时 |
+| --- | --- | --- |
+| 插件本体 | `~/.claude/plugins/feibi-breaker/` | 删目录 |
+| 市场/已装/启用三处登记 | `~/.claude/plugins/*.json`、`settings.json` 的 `enabledPlugins` | 注销 |
+| 上游接管 | `settings.json` 的 `ANTHROPIC_BASE_URL / API_KEY / MODEL` | 按 `config.direct` 还原 |
+| 状态条 | `settings.json` 的 `statusLine` | 撤掉（别人的先备份再替换） |
+| 开机自启 | Startup 里的 `feibi-breaker-cc.vbs` | 删 |
+| 桌面面板快捷方式 | `桌面\菲比破限面板.url` | 保留（就是个网址） |
+| 提示词副本/流水 | `~/.claude/feibi/` | **保留**，`-Purge` 才删 |
+
+### 为什么安装器要"自检"
+
+`install.ps1` 跑完会做三件事，任何一步失败都当场说清楚，不留半装状态：
+
+1. 三个 hook 各用 `{}` 跑一遍，输出不是合法 JSON 就报错（路径/语法类问题当场暴露）
+2. `direct` 会真发一条最小请求，看回复带不带 `(Discord交流群@JZZwqDNN2)` 署名
+3. 最后打一次 `feibi-cc show`，把接线、开关、参数、计数全摆出来
+
+### 身份守卫（这一版新增）
+
+实测同一个请求同一模型，有时给菲比、有时给「我是 Claude，Anthropic 开发的 AI 助手」——纯概率。
+现在把这种开头当成**不合格**：拦掉、重发一次（面板里 `identityGuard` 可关）。
+判定只看开头 40 字，正文里提到 Claude 的正常回答不会误伤。

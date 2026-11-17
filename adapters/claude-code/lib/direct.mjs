@@ -104,6 +104,9 @@ export function enableDirect(options) {
 
   writeAtomic(paths.claudeSettings, `${JSON.stringify(data, null, 2)}\n`)
 
+  // 桌面版/CC Switch 发来的是 claude-sonnet-5 这类名字，上游不认；
+  // 直连时顺手把强制模型名设上，别指望调用方配合。
+  config.forceModel = options.model
   config.upstream = options.upstream
   config.port = port
   // key 也要记：CC Switch 之类会把 settings.json 里的 API_KEY 抹掉，
