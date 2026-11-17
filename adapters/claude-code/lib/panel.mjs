@@ -412,9 +412,20 @@ export async function probeModels({ upstream, key, models, timeoutMs = 8000 }) {
         body: JSON.stringify({ model: id, messages: [{ role: 'user', content: 'hi' }] }),
         signal: AbortSignal.timeout(timeoutMs),
       })
-      if (response.status === 200) return { id, ok: true }
-      // 有些中转不实现 count_tokens，但模型是好的：404 且 body 里没有 model_not_found 就当能用
       const text = await response.text().catch(() => '')
+      if (response.status === 200) {
+        // 必须真的数出 token 才算可用：有些中转对不支持的模型回 200 + 空对象，
+        // 只看状态码会把不可用的模型当成可用（真机踩过：doctor 把 forceModel
+        // 自动切成了 v4-pro，随后所有请求 404）。
+        try {
+          const body = JSON.parse(text)
+          if (typeof body?.input_tokens === 'number' && body.input_tokens > 0) return { id, ok: true }
+        } catch {
+          // 不是 JSON，按不可用处理
+        }
+        return { id, ok: false }
+      }
+      // 404 里没有 model_not_found 的，多半是这个中转不实现 count_tokens，模型本身可能是好的
       const code = /model_not_found|not supported by any configured account/i.test(text)
       return { id, ok: !code }
     } catch {

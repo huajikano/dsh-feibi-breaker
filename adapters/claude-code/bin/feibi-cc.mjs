@@ -1057,9 +1057,18 @@ async function cmdDoctor(flags, home) {
       modelsOk = currentOk
       modelsDetail = currentOk ? `${current} ✓（可用 ${usable.length}/${listed.models.length}）` : `${current || '（未设）'} 不在可用列表里：${usable.join(', ')}`
       if (!currentOk && fix && usable.length > 0) {
-        const result = applyConfigPatch(home, { forceModel: usable[0] }, config)
+        /**
+         * 按"已知能出字"的顺序挑，不盲取第一个。
+         *
+         * usable 只代表"count_tokens 数得出 token"，不代表能真的生成；
+         * 而且列表顺序来自上游，随时会变。历史上 deepseek-v4.1-flash 一直稳定，
+         * 所以优先它；没有才退到列表第一个。
+         */
+        const preferred = ['deepseek-v4.1-flash', 'deepseek-chat', 'deepseek-reasoner']
+        const pick = preferred.find((id) => usable.includes(id)) ?? usable[0]
+        const result = applyConfigPatch(home, { forceModel: pick }, config)
         if (result.ok) {
-          push('模型名改写', true, `已切到可用模型 ${usable[0]}`, true)
+          push('模型名改写', true, `已切到可用模型 ${pick}`, true)
           modelsOk = true
         } else {
           push('模型名改写', false, result.error, false)
