@@ -123,6 +123,90 @@ export function enableDirect(options) {
  * @param {{home?: string}} [options] - 家目录。
  * @returns {object} 结果。
  */
+/** 合法的上游地址。 */
+function isHttpUrl(value) {
+  return typeof value === 'string' && /^https?:\/\//i.test(value)
+}
+
+/**
+ * 旁路：把 settings.json 直接指到上游，让客户端在**代理没跑**时也能用。
+ *
+ * 为什么要它：接管是把 `ANTHROPIC_BASE_URL` 钉在 127.0.0.1:<port> 上。代理一停，
+ * 那个端口就没人应，客户端所有请求当场断——用户看到的是"关了代理，整套都不能用了"。
+ * 旁路把同一个字段改回上游地址，链路就绕开本机进程。
+ *
+ * 目标顺序：显式传入 > `config.bypass` > `config.direct` > `config.upstream`。
+ *
+ * @param {string} [home] - 家目录。
+ * @param {{upstream?: string, key?: string, model?: string, persist?: boolean}} [options] - 覆盖项。
+ * @returns {{ok: boolean, upstream?: string, model?: string, error?: string}} 结果。
+ */
+export function enableBypass(home, options = {}) {
+  const paths = feibiPaths(home)
+  const config = loadConfig(home)
+  const read = readSettings(paths.claudeSettings)
+  if (!read.ok) return { ok: false, error: `settings.json 读不了：${read.error}` }
+
+  const saved = config.bypass !== null && typeof config.bypass === 'object' ? config.bypass : {}
+  const direct = config.direct !== null && typeof config.direct === 'object' ? config.direct : {}
+
+  const upstream = options.upstream ?? saved.upstream ?? direct.upstream ?? config.upstream
+  if (!isHttpUrl(upstream)) {
+    return { ok: false, error: `没有可用的旁路上游（当前是 ${String(upstream)}），先 feibi-cc bypass --upstream https://… --key … --model …` }
+  }
+  const key = options.key ?? saved.key ?? direct.key ?? null
+  const model = options.model ?? saved.model ?? direct.model ?? null
+
+  const data = read.data
+  data.env = data.env !== null && typeof data.env === 'object' && !Array.isArray(data.env) ? data.env : {}
+  data.env.ANTHROPIC_BASE_URL = upstream
+  if (typeof key === 'string' && key.length > 0) {
+    data.env.ANTHROPIC_API_KEY = key
+    // 只认 x-api-key 的端点遇到 AUTH_TOKEN 会走 Bearer，先摘掉。
+    delete data.env.ANTHROPIC_AUTH_TOKEN
+  }
+  if (typeof model === 'string' && model.length > 0) {
+    data.env.ANTHROPIC_MODEL = model
+    /**
+     * 同时写三档别名：客户端（尤其桌面版）常常不读 ANTHROPIC_MODEL，
+     * 而是按 Sonnet/Opus/Haiku 三档去取模型名。不写这三项的话，
+     * 关掉代理直连上游时客户端还会发 claude-sonnet-5 —— 上游分组没有这个名字，
+     * 直接 404 model_not_found，看起来就是"一关代理就断"。
+     */
+    data.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model
+    data.env.ANTHROPIC_DEFAULT_OPUS_MODEL = model
+    data.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model
+  }
+  writeAtomic(paths.claudeSettings, `${JSON.stringify(data, null, 2)}\n`)
+
+  if (options.persist !== false && (options.upstream || options.key || options.model)) {
+    config.bypass = { upstream, key: key ?? null, model: model ?? null }
+    saveConfig(config, home)
+  }
+
+  return { ok: true, upstream, model, keyed: typeof key === 'string' && key.length > 0 }
+}
+
+/**
+ * 撤掉旁路：把入口改回本代理。
+ *
+ * @param {string} [home] - 家目录。
+ * @returns {{ok: boolean, baseUrl?: string, error?: string}} 结果。
+ */
+export function disableBypass(home) {
+  const paths = feibiPaths(home)
+  const config = loadConfig(home)
+  const read = readSettings(paths.claudeSettings)
+  if (!read.ok) return { ok: false, error: `settings.json 读不了：${read.error}` }
+
+  const data = read.data
+  data.env = data.env !== null && typeof data.env === 'object' && !Array.isArray(data.env) ? data.env : {}
+  const ours = `http://127.0.0.1:${config.port}`
+  data.env.ANTHROPIC_BASE_URL = ours
+  writeAtomic(paths.claudeSettings, `${JSON.stringify(data, null, 2)}\n`)
+  return { ok: true, baseUrl: ours }
+}
+
 export function disableDirect(options = {}) {
   const home = options.home
   const paths = feibiPaths(home)

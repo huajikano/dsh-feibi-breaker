@@ -21,13 +21,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { feibiPaths, loadConfig, saveConfig, loadState } from '../lib/config.mjs'
+import { feibiPaths, loadConfig, saveConfig, loadState, readJson } from '../lib/config.mjs'
 import { createProxy } from '../lib/proxy.mjs'
 import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/prompt-store.mjs'
 import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, enforceDirectEnv, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
 import { statusLine } from '../lib/statusline.mjs'
 import { showPanel, setConfig } from '../lib/panel-cli.mjs'
-import { listUpstreamModels } from '../lib/panel.mjs'
+import { listUpstreamModels, applyConfigPatch } from '../lib/panel.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
 import { enableDirect, disableDirect, enableBypass, disableBypass } from '../lib/direct.mjs'
 import { readEvents } from '../lib/stats.mjs'
@@ -981,6 +981,131 @@ function cmdWatchdog(positional, flags, home) {
   return 0
 }
 
+/**
+ * 体检 + 自愈。
+ *
+ * 目标是让 **Claude 自己** 能在会话里跑一条命令就把破限修好——所以这里的输出
+ * 必须是"哪一项不对 + 我做了什么 + 还差什么"，而不是一堆日志。
+ *
+ * @param {object} flags - fix / quiet
+ * @param {string} home - 家目录。
+ * @returns {Promise<number>} 退出码
+ */
+async function cmdDoctor(flags, home) {
+  const config = loadConfig(home)
+  const paths = feibiPaths(home)
+  const fix = flags.fix === true
+  const quiet = flags.quiet === true
+  const say2 = (line) => { if (!quiet) say(line) }
+
+  const rows = []
+  const push = (name, ok, detail, fixed) => rows.push({ name, ok, detail, fixed })
+
+  // 1) 代理
+  let probe = await health(config.port)
+  if (probe === null) {
+    if (fix) {
+      const started = await cmdStart({ ...flags, quiet: true }, home)
+      probe = started === 0 ? await health(config.port) : null
+      push('代理进程', probe !== null, probe !== null ? `已拉起 pid ${probe.pid}` : '拉起失败，看 proxy.log', probe !== null)
+    } else {
+      push('代理进程', false, '没在跑（feibi-cc start / doctor --fix）', false)
+    }
+  } else {
+    push('代理进程', true, `pid ${probe.pid}`, false)
+  }
+
+  // 2) 入口
+  const settings = readJson(paths.claudeSettings) ?? {}
+  const env = settings.env ?? {}
+  const base = typeof env.ANTHROPIC_BASE_URL === 'string' ? env.ANTHROPIC_BASE_URL : ''
+  const pointingHere = base.includes(`127.0.0.1:${config.port}`)
+  if (pointingHere) {
+    push('入口接管', true, base, false)
+  } else if (fix) {
+    if (config.direct) enforceDirectEnv(config, home)
+    const pointed = enforceTakeover(config, home)
+    push('入口接管', true, pointed.changed ? `已抢回（原 ${pointed.from}）` : base || '（空）', pointed.changed)
+  } else {
+    push('入口接管', false, base || '（没设 ANTHROPIC_BASE_URL）', false)
+  }
+
+  // 3) 密钥
+  const key = env.ANTHROPIC_API_KEY ?? ''
+  const keyed = typeof key === 'string' && key.length > 8
+  push('上游密钥', keyed, keyed ? `${key.slice(0, 6)}…` : 'settings.json 里没有 ANTHROPIC_API_KEY', false)
+
+  // 4) 模型可用性
+  let modelsOk = false
+  let modelsDetail = '没测（密钥或入口不对）'
+  if (keyed) {
+    const listed = await listUpstreamModels({ upstream: config.upstream, key, timeoutMs: 5000 })
+    if (!listed.ok) {
+      modelsDetail = `拿不到列表：${listed.error}`
+    } else {
+      const usable = listed.usable ?? listed.models
+      const current = config.forceModel
+      const currentOk = usable.includes(current)
+      modelsOk = currentOk
+      modelsDetail = currentOk ? `${current} ✓（可用 ${usable.length}/${listed.models.length}）` : `${current || '（未设）'} 不在可用列表里：${usable.join(', ')}`
+      if (!currentOk && fix && usable.length > 0) {
+        const result = applyConfigPatch(home, { forceModel: usable[0] }, config)
+        if (result.ok) {
+          push('模型名改写', true, `已切到可用模型 ${usable[0]}`, true)
+          modelsOk = true
+        } else {
+          push('模型名改写', false, result.error, false)
+        }
+      } else {
+        push('模型名改写', currentOk, modelsDetail, false)
+      }
+    }
+    if (!modelsOk && modelsDetail !== '') push('模型名改写', modelsOk, modelsDetail, false)
+  }
+
+  // 5) 破限开关
+  const inject = config.inject !== false
+  const guard = config.guard !== false
+  const identity = config.rewriteIdentity !== false
+  const switchIdx = rows.length
+  push('注入 / 判定 / 改身份锚', inject && guard && identity,
+    `注入 ${inject ? '开' : '关'} · 判定 ${guard ? '开' : '关'} · 改锚 ${identity ? '开' : '关'}`,
+    false)
+  if (fix && !(inject && guard && identity)) {
+    applyConfigPatch(home, { inject: true, guard: true, rewriteIdentity: true, identityGuard: true }, config)
+    rows[switchIdx].ok = true
+    rows[switchIdx].fixed = true
+    rows[switchIdx].detail = '三项已全部打开'
+  }
+
+  // 6) 流量
+  const state = loadState(home)
+  const lastSeen = Date.parse(String(state.lastEventAt ?? ''))
+  const live = Number.isFinite(lastSeen) && Date.now() - lastSeen < 15 * 60 * 1000
+  push('最近流量', live, live ? state.lastEventAt : '15 分钟没有请求（客户端可能绕过了 env）', false)
+
+  // 输出
+  const width = Math.max(...rows.map((r) => r.name.length)) + 2
+  say2('')
+  say2('菲比破限 · 体检')
+  say2('='.repeat(56))
+  for (const row of rows) {
+    const mark = row.ok ? '✓' : '✗'
+    const tail = row.fixed ? '（已修）' : ''
+    say2(`  ${mark} ${row.name.padEnd(width)} ${row.detail}${tail}`)
+  }
+
+  const bad = rows.filter((r) => !r.ok)
+  say2('')
+  if (bad.length === 0) {
+    say2('结论：链路正常，破限生效。')
+    return 0
+  }
+  say2(`结论：${bad.length} 项不对。`)
+  if (!fix) say2('想让 Claude 自己修：feibi-cc doctor --fix')
+  return 1
+}
+
 async function main() {
   const [, , command = 'status', ...rest] = process.argv
   const { flags, rest: positional } = parseArgs(rest)
@@ -1001,6 +1126,7 @@ async function main() {
     case 'set': return setConfig(positional, home)
     case 'models': return cmdModels(home)
     case 'ensure': return cmdEnsure(flags, home)
+    case 'doctor': return cmdDoctor(flags, home)
     case 'watchdog': return cmdWatchdog(positional, flags, home)
     case 'direct': return cmdDirect(flags, home)
     case 'bypass': return cmdBypass(flags, home)
@@ -1024,6 +1150,7 @@ async function main() {
       say('  set       改配置，例：feibi-cc set strictness=max retryMax=3')
       say('  models    列出上游真实可用的模型名')
       say('  ensure    自愈：代理没跑就拉起、settings 被改回就抢回来')
+      say('  doctor    体检（--fix 顺手修）；给 Claude 自己排查用')
       say('  watchdog  install|remove|status   每 5 分钟跑一次 ensure')
       say('  panel     打开网页设置面板（浏览器，本机 127.0.0.1）')
       say('  bypass    切旁路：入口直接指上游，不经过本代理（关代理也能用）')
