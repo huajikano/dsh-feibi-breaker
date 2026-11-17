@@ -166,6 +166,18 @@ test('非流式 JSON：拒绝同样被拦，返回合法 JSON', async () => {
   }
 })
 
+test('强制模型名：上游收到的是我们指定的名字', async () => {
+  const stream = anthropicStream('好')
+  const r = await rig([{ chunks: stream }], { forceModel: 'deepseek-reasoner' })
+  try {
+    await postMessages(r.port, baseBody())
+    const sent = JSON.parse(r.upstream.received[0].body)
+    assert.equal(sent.model, 'deepseek-reasoner', '桌面版发 claude-sonnet-5，上游必须收到我们改的名字')
+  } finally {
+    await r.close()
+  }
+})
+
 test('上游挂了：502 带得清楚', async () => {
   const homes = tempHomes('feibi-proxy-dead')
   const config = { port: 0, upstream: 'http://127.0.0.1:1', inject: true, guard: true, autoRetry: true, retryMax: 0, urlPatterns: ['/v1/messages'], skipBodyPatterns: [], eventLog: false }

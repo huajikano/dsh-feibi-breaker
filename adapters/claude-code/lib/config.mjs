@@ -117,6 +117,16 @@ export function defaultConfig() {
      * 那不是拒绝、判定器抓不住，只能在提示词层堵。
      */
     strictness: 'strict',
+    /**
+     * 强制改写请求里的模型名（空 = 不改）。
+     *
+     * 为什么需要：桌面版绕过 settings.json 的 env，它发出去的模型名是
+     * `claude-sonnet-5` 这种自家名字。如果把桌面版直接指到本代理、而代理上游是
+     * 第三方（DeepSeek 之类），上游会 400 说不认识这个模型。
+     *
+     * 走 CC Switch 那层时它会做映射，这里就不用填；直连场景填上更稳。
+     */
+    forceModel: '',
     /** 是否盯着返回流做拒绝判定。 */
     guard: true,
     /** 判定命中后是否自动重发。 */

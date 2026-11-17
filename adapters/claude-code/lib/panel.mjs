@@ -39,6 +39,7 @@ const EDITABLE = new Set([
   'strictness',
   'exhaustedMode',
   'stopMaxBlocks',
+  'forceModel',
   'eventLog',
 ])
 
@@ -358,6 +359,8 @@ footer{padding:14px 24px;color:var(--dim);font-size:12px;border-top:1px solid va
     <div id="numbers"></div>
     <div class="row"><label>严格度<span class="hint">standard 只放规则；strict 禁反问；max 禁缩减与半成品</span></label>
       <select id="strictness"><option value="standard">standard</option><option value="strict">strict</option><option value="max">max</option></select></div>
+    <div class="row"><label>强制模型名<span class="hint">空=不改；桌面版直连第三方上游时填 deepseek-reasoner 这类名字</span></label>
+      <input type="text" id="forceModel" placeholder="(不填)" style="width:180px"></div>
     <div class="row"><label>重试用光后<span class="hint">notice 给说明 / pass 把最后一次原样放出去</span></label>
       <select id="exhaustedMode"><option value="notice">notice</option><option value="pass">pass</option></select></div>
   </section>
@@ -434,6 +437,8 @@ function render(){
     el.onchange = () => patch({ [el.dataset.key]: Number(el.value) });
   });
 
+  $('forceModel').value = s.config.forceModel || '';
+  $('forceModel').onchange = () => patch({ forceModel: $('forceModel').value.trim() });
   $('strictness').value = s.config.strictness || 'standard';
   $('strictness').onchange = () => patch({ strictness: $('strictness').value });
   $('exhaustedMode').value = s.config.exhaustedMode || 'notice';

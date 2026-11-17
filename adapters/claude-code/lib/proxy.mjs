@@ -160,6 +160,17 @@ export function createProxy(config, options = {}) {
     headers['accept-encoding'] = 'identity'
     headers['content-length'] = String(payload.length)
 
+    /**
+     * 认证头兼容：只带 `Authorization: Bearer` 的上游会 401。
+     *
+     * CC Switch、各种中转、桌面版自己，发的是 Bearer；而多数 Anthropic 兼容端点
+     * 只认 `x-api-key`。两个都带上，成本为零，能省掉一整类"链路通了但一直 401"。
+     */
+    const authorization = headers.authorization ?? headers.Authorization
+    if (typeof authorization === 'string' && authorization.startsWith('Bearer ') && headers['x-api-key'] === undefined) {
+      headers['x-api-key'] = authorization.slice(7).trim()
+    }
+
     return new Promise((resolve, reject) => {
       const request = transport.request({
         protocol: base.protocol,
@@ -450,6 +461,14 @@ export function createProxy(config, options = {}) {
 
     const model = modelOf(body)
     const baseBody = body
+
+    // 强制模型名：桌面版直接指过来时，它发的 `claude-sonnet-5` 第三方上游不认。
+    // 放在注入之前改，后面所有分支（首发/重试/自检）都用同一个名字。
+    if (typeof config.forceModel === 'string' && config.forceModel.length > 0 && baseBody.model !== config.forceModel) {
+      const from = baseBody.model
+      baseBody.model = config.forceModel
+      stats.record({ kind: 'model', protocol, path: pathname, from, to: config.forceModel })
+    }
 
     // 诊断：把真实请求的 system 开头落盘。改身份句之前必须知道真实文本长什么样，
     // 猜句式是最浪费时间的做法。
