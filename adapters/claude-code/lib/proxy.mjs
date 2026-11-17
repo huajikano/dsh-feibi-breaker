@@ -123,6 +123,19 @@ function sendJson(res, status, body) {
 }
 
 /**
+ * Claude Desktop 认得的三档模型名。
+ *
+ * CC Switch 在加"直连"供应商时会校验：模型必须用 Claude Desktop 能识别的
+ * Sonnet / Opus / Haiku 名字，否则报「直连模型必须使用 Claude Desktop 可识别的
+ * Sonnet/Opus/Haiku 模型名」。第三方名字（deepseek-reasoner 之类）摆在列表里
+ * 会被判不合格。
+ *
+ * 所以这里只报 Claude 家的名字；真正的上游模型名由 `forceModel` 在代理内部改写——
+ * 客户端看到的是 Claude，上游收到的是 DeepSeek，两边都满意。
+ */
+const CLAUDE_MODELS = ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-5']
+
+/**
  * 模型列表端点。
  *
  * 为什么必须有：CC Switch（以及一堆中转/客户端）在"添加供应商"时会先 GET
@@ -130,7 +143,7 @@ function sendJson(res, status, body) {
  * 是 DeepSeek 的 `/anthropic` 前缀，没有 `/anthropic/v1/models`，于是 404 ——
  * CC Switch 就报"未找到可用的模型列表端点"。
  *
- * 策略：先问上游；上游给不出可用列表就自己合成一份。合成的形状同时带
+ * 策略：先问上游；上游给不出可用列表就自己合成。合成的形状同时带
  * OpenAI（`object:"list"`）和 Anthropic（`has_more`/`type:"model"`）两套字段，
  * 因为不同的客户端认不同的那套，而多写两个字段的成本是零。
  *
@@ -142,8 +155,8 @@ export function modelListBody(config) {
   const push = (id) => {
     if (typeof id === 'string' && id.length > 0 && !ids.includes(id)) ids.push(id)
   }
-  push(config.forceModel)
-  for (const id of ['deepseek-reasoner', 'deepseek-chat', 'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-5']) push(id)
+  for (const id of CLAUDE_MODELS) push(id)
+  for (const id of Array.isArray(config.modelsExtra) ? config.modelsExtra : []) push(id)
 
   const data = ids.map((id) => ({
     id,

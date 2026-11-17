@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { feibiPaths, loadConfig, saveConfig, loadState } from '../lib/config.mjs'
 import { createProxy } from '../lib/proxy.mjs'
 import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/prompt-store.mjs'
-import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
+import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, enforceDirectEnv, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
 import { statusLine } from '../lib/statusline.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
 import { enableDirect, disableDirect } from '../lib/direct.mjs'
@@ -171,6 +171,11 @@ async function cmdServe(flags, home) {
   if (config.watchSettings !== false) {
     let repairs = 0
     const timer = setInterval(async () => {
+      // 直连模式先守 env（CC Switch 会把 key 和 model 一起抹掉），再守 baseURL。
+      if (config.direct) {
+        const direct = enforceDirectEnv(config, home)
+        if (direct.changed) log('settings.json 的直连 env（key/模型）被抹掉了，已按 config.direct 还原。')
+      }
       // 先排除"另一个菲比代理在抢端口"：那种情况下被写进来的地址是它自己，
       // 跟着它走会把自己指成一个死循环，而且会把 upstream 写死成对方的端口。
       const drift = currentBaseUrl(home)

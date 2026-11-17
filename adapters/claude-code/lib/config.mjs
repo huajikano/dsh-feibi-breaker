@@ -127,6 +127,14 @@ export function defaultConfig() {
      * 走 CC Switch 那层时它会做映射，这里就不用填；直连场景填上更稳。
      */
     forceModel: '',
+    /**
+     * `/v1/models` 里额外报上去的模型名。
+     *
+     * 默认空：CC Switch 加"直连"供应商时只认 Claude Desktop 那三档
+     * （Sonnet/Opus/Haiku），多报第三方名字会被判不合格。真要用别家名字的
+     * 客户端，在这里加，例如 ["deepseek-reasoner"]。
+     */
+    modelsExtra: [],
     /** 是否盯着返回流做拒绝判定。 */
     guard: true,
     /** 判定命中后是否自动重发。 */

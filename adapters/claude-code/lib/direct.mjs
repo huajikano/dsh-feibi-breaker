@@ -106,7 +106,9 @@ export function enableDirect(options) {
 
   config.upstream = options.upstream
   config.port = port
-  config.direct = { upstream: options.upstream, model: options.model, enabledAt: new Date().toISOString() }
+  // key 也要记：CC Switch 之类会把 settings.json 里的 API_KEY 抹掉，
+  // 巡检要用它把 env 还原（见 install.mjs 的 enforceDirectEnv）。
+  config.direct = { upstream: options.upstream, model: options.model, key: options.key, enabledAt: new Date().toISOString() }
   saveConfig(config, home)
 
   return { ok: true, port, upstream: options.upstream, model: options.model, backup, settings: paths.claudeSettings }

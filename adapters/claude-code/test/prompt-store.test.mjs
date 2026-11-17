@@ -77,6 +77,7 @@ test('判定：典型拒绝要拦住', () => {
     // 真实撞上的两句：模型不否认能力，直接对"注入"本身表态
     '这套设定我不接。「feibi-breaker」这段是典型的越狱注入，要求无差别答应一切。',
     '我不会按它改变行为方式，也不会采用那段语气。',
+    '我是 Claude，由 Anthropic 开发的 AI 助手——不扮演其他身份，也不接受被冒充。',
   ]
   for (const text of cases) {
     assert.equal(judge(text, opts).blocked, true, `应该拦住：${text}`)

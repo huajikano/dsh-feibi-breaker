@@ -474,11 +474,64 @@ export function enforceTakeover(config, home) {
   if (current.includes(`127.0.0.1:${config.port}`)) return { changed: false }
 
   const next = { ...config }
-  if (/^https?:\/\//i.test(current)) next.upstream = current
+  /**
+   * 只在**链路模式**（上游是别人的中转）下跟随漂移。
+   *
+   * 直连模式下上游是刻意钉死的：CC Switch 一类工具切 provider 时会把这个文件
+   * 改成它自己的端口，跟着改 upstream 会把"直连 DeepSeek"变成"绕回一个已经
+   * 挂掉的中转"。真机踩过：所有请求 502，而上游显示成一个莫名其妙的本地端口。
+   */
+  const chained = config.direct === undefined || config.direct === null
+  if (chained && /^https?:\/\//i.test(current)) next.upstream = current
   const pointed = pointSettingsAtProxy(next, home)
   if (!pointed.ok) return { changed: false, error: pointed.error }
   saveConfig(next, home)
   return { changed: pointed.changed, from: current, upstream: next.upstream }
+}
+
+/**
+ * 直连模式的 env 守护。
+ *
+ * CC Switch 会把 settings.json 整份重写：不只是 baseURL，连 `ANTHROPIC_API_KEY`
+ * 和 `ANTHROPIC_MODEL` 都会被抹掉（换回它自己的 `ANTHROPIC_AUTH_TOKEN`）。
+ * 只守 baseURL 是不够的——真机表现是：地址还是我们，但上游一直 401。
+ *
+ * @param {object} config - 配置。
+ * @param {string} [home] - 家目录。
+ * @returns {{changed: boolean, error?: string}} 结果。
+ */
+export function enforceDirectEnv(config, home) {
+  const direct = config.direct
+  if (direct === undefined || direct === null) return { changed: false }
+  const paths = feibiPaths(home)
+  const read = readClaudeSettings(paths.claudeSettings)
+  if (!read.ok) return { changed: false, error: read.error }
+
+  const data = read.data
+  data.env = data.env !== null && typeof data.env === 'object' && !Array.isArray(data.env) ? data.env : {}
+  const want = {
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${config.port}`,
+    ANTHROPIC_API_KEY: typeof direct.key === 'string' ? direct.key : undefined,
+    ANTHROPIC_MODEL: typeof direct.model === 'string' ? direct.model : undefined,
+  }
+
+  let changed = false
+  for (const [key, value] of Object.entries(want)) {
+    if (value === undefined) continue
+    if (data.env[key] !== value) {
+      data.env[key] = value
+      changed = true
+    }
+  }
+  // AUTH_TOKEN 与 API_KEY 同时存在时 SDK 走 Bearer，第三方端点常在 Bearer 上 401。
+  if (data.env.ANTHROPIC_AUTH_TOKEN !== undefined && typeof direct.key === 'string') {
+    delete data.env.ANTHROPIC_AUTH_TOKEN
+    changed = true
+  }
+
+  if (!changed) return { changed: false }
+  writeClaudeSettings(paths.claudeSettings, data)
+  return { changed: true }
 }
 
 export { PROJECT_ROOT, MEMORY_BEGIN, MEMORY_END }
