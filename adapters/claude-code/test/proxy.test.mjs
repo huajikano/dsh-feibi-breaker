@@ -178,6 +178,29 @@ test('强制模型名：上游收到的是我们指定的名字', async () => {
   }
 })
 
+test('模型列表：上游给不出也要能过 CC Switch 的校验', async () => {
+  // 上游是死的，模拟"加供应商时还没接通"的那一刻
+  const homes = tempHomes('feibi-models')
+  const proxy = createProxy({ port: 0, upstream: 'http://127.0.0.1:1', forceModel: 'deepseek-reasoner', urlPatterns: ['/v1/messages'], skipBodyPatterns: [], eventLog: false }, { home: homes.home })
+  const { port } = await proxy.listen(0)
+  try {
+    for (const path of ['/v1/models', '/models']) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`)
+      assert.equal(response.status, 200, path + ' 必须 200，否则 CC Switch 报"未找到可用的模型列表端点"')
+      const body = await response.json()
+      assert.ok(Array.isArray(body.data) && body.data.length > 0)
+      assert.equal(body.object, 'list', 'OpenAI 形状')
+      assert.ok(body.data.some((m) => m.id === 'deepseek-reasoner'), 'forceModel 要在列表里')
+    }
+    const one = await fetch(`http://127.0.0.1:${port}/v1/models/deepseek-chat`)
+    assert.equal(one.status, 200)
+    assert.equal((await one.json()).id, 'deepseek-chat')
+  } finally {
+    await proxy.close()
+    homes.cleanup()
+  }
+})
+
 test('上游挂了：502 带得清楚', async () => {
   const homes = tempHomes('feibi-proxy-dead')
   const config = { port: 0, upstream: 'http://127.0.0.1:1', inject: true, guard: true, autoRetry: true, retryMax: 0, urlPatterns: ['/v1/messages'], skipBodyPatterns: [], eventLog: false }

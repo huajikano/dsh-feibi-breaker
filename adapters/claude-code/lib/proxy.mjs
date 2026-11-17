@@ -123,6 +123,101 @@ function sendJson(res, status, body) {
 }
 
 /**
+ * 模型列表端点。
+ *
+ * 为什么必须有：CC Switch（以及一堆中转/客户端）在"添加供应商"时会先 GET
+ * `/v1/models` 校验地址。代理只认 `/v1/messages`，其余一律转发给上游；而上游
+ * 是 DeepSeek 的 `/anthropic` 前缀，没有 `/anthropic/v1/models`，于是 404 ——
+ * CC Switch 就报"未找到可用的模型列表端点"。
+ *
+ * 策略：先问上游；上游给不出可用列表就自己合成一份。合成的形状同时带
+ * OpenAI（`object:"list"`）和 Anthropic（`has_more`/`type:"model"`）两套字段，
+ * 因为不同的客户端认不同的那套，而多写两个字段的成本是零。
+ *
+ * @param {object} config - 生效配置。
+ * @returns {object} 列表响应体。
+ */
+export function modelListBody(config) {
+  const ids = []
+  const push = (id) => {
+    if (typeof id === 'string' && id.length > 0 && !ids.includes(id)) ids.push(id)
+  }
+  push(config.forceModel)
+  for (const id of ['deepseek-reasoner', 'deepseek-chat', 'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-5']) push(id)
+
+  const data = ids.map((id) => ({
+    id,
+    object: 'model',
+    type: 'model',
+    display_name: id,
+    created_at: new Date(0).toISOString(),
+  }))
+
+  return {
+    object: 'list',
+    data,
+    has_more: false,
+    first_id: data[0]?.id ?? null,
+    last_id: data[data.length - 1]?.id ?? null,
+  }
+}
+
+/**
+ * 处理模型列表请求；不是这个路径就返回 false。
+ *
+ * @param {import('node:http').IncomingMessage} req - 请求。
+ * @param {import('node:http').ServerResponse} res - 响应。
+ * @param {object} config - 生效配置。
+ * @param {(req: object, body: string) => Promise<import('node:http').IncomingMessage>} sendUpstream - 上游发送器。
+ * @returns {Promise<boolean>} 是否处理了。
+ */
+async function handleModels(req, res, config, sendUpstream) {
+  if (req.method !== 'GET') return false
+  const pathname = (() => {
+    try {
+      return new URL(req.url ?? '/', 'http://127.0.0.1').pathname
+    } catch {
+      return ''
+    }
+  })()
+  if (!/^\/(v1\/)?models(\/[^/]+)?$/.test(pathname)) return false
+
+  // 先问上游：上游要是自己会报模型列表，就用它的（换供应商时不用改代码）。
+  try {
+    const upstream = await sendUpstream(req, '')
+    if ((upstream.statusCode ?? 0) === 200) {
+      const chunks = []
+      for await (const chunk of decodedBody(upstream)) chunks.push(chunk)
+      const raw = Buffer.concat(chunks)
+      try {
+        const parsed = JSON.parse(raw.toString('utf8'))
+        if (Array.isArray(parsed?.data) && parsed.data.length > 0) {
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(raw)
+          return true
+        }
+      } catch {
+        // 上游给的不是 JSON，走合成。
+      }
+    } else {
+      upstream.resume?.()
+    }
+  } catch {
+    // 上游不通也要能过校验：校验期本来就是"还没接通"的时候。
+  }
+
+  const body = modelListBody(config)
+  const match = pathname.match(/^\/(v1\/)?models\/([^/]+)$/)
+  const payload = match
+    ? body.data.find((model) => model.id === decodeURIComponent(match[2])) ?? body.data[0]
+    : body
+  const text = JSON.stringify(payload)
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(text) })
+  res.end(text)
+  return true
+}
+
+/**
  * 建代理服务器。
  *
  * @param {object} config - 生效配置。
@@ -423,6 +518,13 @@ export function createProxy(config, options = {}) {
     if (pathname === '/feibi/stats') {
       sendJson(res, 200, stats.snapshot())
       return
+    }
+
+    // 模型列表端点先接住：CC Switch 之类加供应商时会来校验。
+    try {
+      if (await handleModels(req, res, config, sendUpstream)) return
+    } catch (error) {
+      log(`模型列表处理失败: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     if (req.method !== 'POST' || !isLlmPath(config.urlPatterns, pathname)) {
