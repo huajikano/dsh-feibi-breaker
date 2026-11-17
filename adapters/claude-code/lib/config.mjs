@@ -109,6 +109,14 @@ export function defaultConfig() {
      * 最终答案仍是"我是 Claude Code"——就是被这句锚拉回去的。
      */
     rewriteIdentity: true,
+    /**
+     * 严格度档位：standard | strict | max。
+     *
+     * 只影响**头段**加的那一两句执行要求（禁反问、禁半成品）。
+     * 默认 strict：模型最常见的软绕法是"你还没说清楚，先说这几点"，
+     * 那不是拒绝、判定器抓不住，只能在提示词层堵。
+     */
+    strictness: 'strict',
     /** 是否盯着返回流做拒绝判定。 */
     guard: true,
     /** 判定命中后是否自动重发。 */

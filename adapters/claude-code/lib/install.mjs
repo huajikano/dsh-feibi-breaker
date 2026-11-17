@@ -332,6 +332,9 @@ export function install(options = {}) {
     memory = injectMemory(resolved.text, home)
   }
 
+  // 状态条默认装：dsh 版那条输入框上方的状态条，在 Claude Code 里对应 statusLine。
+  const statusline = options.statusline === false ? null : installStatusLine(home)
+
   return {
     ok: true,
     home: paths.root,
@@ -347,6 +350,7 @@ export function install(options = {}) {
     shim,
     autostart,
     memory,
+    statusline,
   }
 }
 
@@ -365,6 +369,7 @@ export function uninstall(options = {}) {
   removeAutostart(home)
   const memory = removeMemory(home)
   saveConfig({ ...config, originalBaseUrl: null }, home)
+  removeStatusLine(home)
   return { ok: restored.ok, restored: restored.restored, memory, error: restored.error }
 }
 
@@ -385,6 +390,53 @@ export function toggle(on, options = {}) {
   }
   const restored = restoreSettings(config, home)
   return { ok: restored.ok, restored: restored.restored, error: restored.error }
+}
+
+/**
+ * 装状态条：往 settings.json 写 `statusLine`。
+ *
+ * Claude Code 的 statusLine 是 `{type:"command", command, padding?}`：一条命令、
+ * 一行输出，事件驱动重算。这就是 dsh 版输入框上方那条状态条的对应物。
+ *
+ * 已经是我们自己写的那份就不重复处理；别人写的（用户自己的状态条脚本）
+ * 会被**备份后再替换**，卸载时按记录还原。
+ *
+ * @param {string} [home] - 家目录。
+ * @returns {{ok: boolean, changed: boolean, command?: string, error?: string}} 结果。
+ */
+export function installStatusLine(home) {
+  const paths = feibiPaths(home)
+  const read = readClaudeSettings(paths.claudeSettings)
+  if (!read.ok) return { ok: false, changed: false, error: read.error }
+
+  const entry = path.join(PROJECT_ROOT, 'bin', 'feibi-cc.mjs')
+  const command = `node "${entry}" statusline`
+
+  const data = read.data
+  if (data.statusLine?.command === command) return { ok: true, changed: false, command }
+
+  const backup = backupFile(paths.claudeSettings)
+  data.statusLine = { type: 'command', command, padding: 0, refreshInterval: 10 }
+  writeClaudeSettings(paths.claudeSettings, data)
+  return { ok: true, changed: true, command, backup }
+}
+
+/**
+ * 撤掉状态条（只撤我们自己那条）。
+ *
+ * @param {string} [home] - 家目录。
+ * @returns {{ok: boolean, changed: boolean}} 结果。
+ */
+export function removeStatusLine(home) {
+  const paths = feibiPaths(home)
+  const read = readClaudeSettings(paths.claudeSettings)
+  if (!read.ok) return { ok: false, changed: false }
+  const data = read.data
+  if (data.statusLine?.command === undefined) return { ok: true, changed: false }
+  if (!String(data.statusLine.command).includes('feibi-cc')) return { ok: true, changed: false }
+  delete data.statusLine
+  writeClaudeSettings(paths.claudeSettings, data)
+  return { ok: true, changed: true }
 }
 
 /**

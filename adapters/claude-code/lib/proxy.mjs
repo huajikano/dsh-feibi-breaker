@@ -28,6 +28,7 @@ import zlib from 'node:zlib'
 import fs from 'node:fs'
 import { URL } from 'node:url'
 import { feibiPaths } from './config.mjs'
+import { handlePanel } from './panel.mjs'
 import { resolvePrompt } from './prompt-store.mjs'
 import { judge, judgeOptions, hasSignalFast, SCAN_WINDOW } from './judge.mjs'
 import { extractText, textOfJson, synthStream, synthJsonBody } from './sse.mjs'
@@ -387,6 +388,15 @@ export function createProxy(config, options = {}) {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const pathname = url.pathname
 
+    // 面板优先：它在同一个端口上，路由前缀固定 /feibi/。
+    try {
+      if (await handlePanel(req, res, { home, config })) return
+    } catch (error) {
+      log(`面板处理失败: ${error instanceof Error ? error.message : String(error)}`)
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: '面板内部错误' })
+      return
+    }
+
     if (pathname === '/feibi/health') {
       sendJson(res, 200, {
         ok: true,
@@ -471,7 +481,7 @@ export function createProxy(config, options = {}) {
             renamed = neutralizeIdentity(baseBody, protocol)
             if (renamed > 0) stats.record({ kind: 'identity', protocol, path: pathname, rewrites: renamed })
           }
-          const injected = injectPayload(baseBody, resolved.text, protocol, { dualLayer: config.dualLayer !== false })
+          const injected = injectPayload(baseBody, resolved.text, protocol, { dualLayer: config.dualLayer !== false, strictness: config.strictness })
           if (injected) stats.record({ kind: 'inject', protocol, path: pathname, chars: resolved.text.length, source: resolved.source, dualLayer: config.dualLayer !== false })
         }
       } catch (error) {

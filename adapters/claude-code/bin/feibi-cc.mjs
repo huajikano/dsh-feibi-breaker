@@ -24,7 +24,8 @@ import { fileURLToPath } from 'node:url'
 import { feibiPaths, loadConfig, saveConfig, loadState } from '../lib/config.mjs'
 import { createProxy } from '../lib/proxy.mjs'
 import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/prompt-store.mjs'
-import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, PROJECT_ROOT } from '../lib/install.mjs'
+import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
+import { statusLine } from '../lib/statusline.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
 import { enableDirect, disableDirect } from '../lib/direct.mjs'
 import { readEvents } from '../lib/stats.mjs'
@@ -406,6 +407,43 @@ function cmdPlugin(positional, flags, home) {
 }
 
 // ---------------------------------------------------------------------------
+// panel / statusline：设置面板与状态条
+// ---------------------------------------------------------------------------
+
+/**
+ * 打开设置面板。
+ *
+ * 代理没跑就先起（面板是它的路由）。起不来就把原因说清楚，别让人对着空白页猜。
+ */
+async function cmdPanel(flags, home) {
+  const config = loadConfig(home)
+  const port = Number(flags.port) > 0 ? Number(flags.port) : config.port
+  const up = await health(port)
+  if (up === null) {
+    const started = await cmdStart(flags, home)
+    if (started !== 0) return started
+  }
+  const url = `http://127.0.0.1:${port}/feibi/panel`
+  say(`设置面板：${url}`)
+  if (flags.open !== false) {
+    try {
+      spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+    } catch {
+      say('打不开浏览器，手动复制上面的地址。')
+    }
+  }
+  const sl = installStatusLine(home)
+  say(sl.ok ? '状态条已确认（settings.json 的 statusLine）。' : `状态条没装上：${sl.error}`)
+  return 0
+}
+
+/** 状态条一行输出。给 settings.json 的 statusLine 命令用，别的东西也会调。 */
+function cmdStatusline(home) {
+  process.stdout.write(`${statusLine({ home })}\n`)
+  return 0
+}
+
+// ---------------------------------------------------------------------------
 // direct / undirect：旁路 CC Switch，直连一个确定能用的端点
 // ---------------------------------------------------------------------------
 
@@ -677,6 +715,8 @@ async function main() {
     case 'on': return cmdToggle(true, home)
     case 'off': return cmdToggle(false, home)
     case 'plugin': return cmdPlugin(positional, flags, home)
+    case 'panel': return cmdPanel(flags, home)
+    case 'statusline': return cmdStatusline(home)
     case 'direct': return cmdDirect(flags, home)
     case 'undirect': return cmdUndirect(home)
     case 'status': return cmdStatus(home)
@@ -693,6 +733,8 @@ async function main() {
     case '-h': {
       say('feibi-cc <命令>')
       say('  plugin    install|uninstall|status   装成 Claude Code 插件（hook 形态，推荐）')
+      say('  panel     打开设置面板（浏览器，本机 127.0.0.1）')
+      say('  statusline 打印状态条那一行（给 settings.json 用）')
       say('  direct    旁路中间层，直连一个确定能用的端点（--upstream --key --model）')
       say('  undirect  撤销直连，env 还原')
       say('  install   接管 settings.json 并初始化（代理形态；--port --upstream --autostart --memory）')
