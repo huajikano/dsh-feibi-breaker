@@ -140,6 +140,58 @@ async function healthFrom(baseUrl) {
  * 而"代理被杀 → 会话断联"这件事必须有人管。父子进程最简单：
  * Startup 里起的是父进程，父进程只干一件事——保证 serve 一直在。
  */
+/**
+ * 用户是否在 Claude 里把插件**明确关掉了**。
+ *
+ * 只看显式的 false：没写这个键（老装法、只用代理不用插件）不算关，
+ * 不能因为读不到就把进程杀了。
+ *
+ * @param {string} home - 家目录。
+ * @returns {boolean} 是否被明确停用。
+ */
+function pluginDisabledByUser(home) {
+  const settings = readJson(feibiPaths(home).claudeSettings) ?? {}
+  const value = settings?.enabledPlugins?.['feibi-breaker@feibi-breaker']
+  return value === false
+}
+
+/**
+ * 插件被停用时的收尾。
+ *
+ * 用户的原话是"在 Claude 里关掉插件启用时，代理进程等全部相关的东西都关掉"——
+ * 所以这里不只是退出，还要把留在系统里的痕迹一起撤掉：状态条、开机自启。
+ * 只留 ~/.claude/feibi（提示词与流水），下次启用还在。
+ *
+ * @param {string} home - 家目录。
+ * @param {(line: string) => void} log - 日志。
+ */
+function teardownForDisabledPlugin(home, log) {
+  /**
+   * 先把入口交还，再撤状态条。
+   *
+   * 顺序很重要：巡检可能在退出前刚把 baseURL 抢回 45721，如果就这样退掉，
+   * 客户端会指着一个死端口 —— 那正是之前"一关就断"的成因。
+   */
+  try {
+    const released = releaseSettings({ home })
+    if (released.ok) log(`插件已停用：入口已交还 ${released.baseUrl}`)
+  } catch {
+    // 交还失败也要继续撤状态条
+  }
+  try {
+    const statusline = removeStatusLine(home)
+    if (statusline.changed) log('插件已停用：状态条已从 settings.json 撤掉')
+  } catch {
+    // 撤不掉也只是那一行还在，不影响主要目标
+  }
+  try {
+    const auto = removeAutostart(home)
+    if (auto.ok) log('插件已停用：开机自启已移除')
+  } catch {
+    // 同上
+  }
+}
+
 async function supervise(flags, home) {
   const config = loadConfig(home)
   const port = Number(flags.port) > 0 ? Number(flags.port) : config.port
@@ -170,6 +222,14 @@ async function supervise(flags, home) {
 
     const lived = Date.now() - startedAt
     log(`子进程退出（code=${exitCode}，存活 ${Math.round(lived / 1000)}s）`)
+
+    // 插件被明确停用 → 不再重启，收尾后整个看门狗退出
+    if (pluginDisabledByUser(home)) {
+      log('插件已停用：看门狗退出，不再重启代理')
+      teardownForDisabledPlugin(home, log)
+      try { fs.unlinkSync(feibiPaths(home).pid) } catch { /* ignore */ }
+      process.exit(0)
+    }
 
     // 刚起来就死的（端口冲突、配置坏）不能狂重启，退避到最多 30 秒
     backoff = lived < 5000 ? Math.min(backoff * 2, 30000) : 1000
@@ -229,11 +289,16 @@ async function cmdServe(flags, home) {
   // 盯住 settings.json：CC Switch 切 provider 时会整份重写它，
   // 一重写我们的接管就没了。每 3 秒看一次，被改了就补回来，
   // 并且把被写进去的地址当成新的上游（那才是用户此刻想去的地方）。
-  if (config.watchSettings !== false) {
+  {
     let repairs = 0
     const timer = setInterval(async () => {
+      // 插件在 Claude 里被关掉 → 前台 serve 直接退出（看门狗那条分支会接管收尾）
+      if (pluginDisabledByUser(home)) {
+        log('检测到插件已停用，代理退出。')
+        process.exit(0)
+      }
       // 直连模式先守 env（CC Switch 会把 key 和 model 一起抹掉），再守 baseURL。
-      if (config.direct) {
+      if (config.direct && config.watchSettings !== false) {
         const direct = enforceDirectEnv(config, home)
         if (direct.changed) log('settings.json 的直连 env（key/模型）被抹掉了，已按 config.direct 还原。')
       }
@@ -248,6 +313,9 @@ async function cmdServe(flags, home) {
         }
       }
 
+      // —— 以下才是接管巡检：release 之后 watchSettings=false，这里一个字都不做，
+      // 免得又把用户刚交给 CC Switch 的地址抢回来。
+      if (config.watchSettings === false) return
       const result = enforceTakeover(config, home)
       if (result.error) {
         log(`接管巡检失败：${result.error}`)
@@ -272,6 +340,14 @@ async function cmdServe(flags, home) {
 
 async function cmdStart(flags, home) {
   const config = loadConfig(home)
+  // 插件在 Claude 里被关掉时不许再起代理：用户要的是"关掉就全关"。
+  // 确实想单独跑代理（只当转发/面板用）就加 --force。
+  if (pluginDisabledByUser(home) && flags.force !== true) {
+    process.stderr.write('插件在 Claude 里是关掉的（enabledPlugins=false），不启动代理。\n')
+    process.stderr.write('  要单独跑代理（只做转发/面板）：feibi-cc start --force\n')
+    process.stderr.write('  要重新启用破限：feibi-cc on（会把入口接管回来）\n')
+    return 1
+  }
   if (Number(flags.port) > 0) config.port = Number(flags.port)
   const existing = await health(config.port)
   if (existing !== null) {

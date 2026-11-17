@@ -154,6 +154,13 @@ export function defaultConfig() {
     abortUpstream: true,
     /** 重试也用光之后怎么收场：notice 给一段合成提示，pass 把最后一次原样放出去。 */
     exhaustedMode: 'notice',
+    /**
+     * Stop hook 一轮里最多劝回几次。
+     *
+     * 必须在这里有默认值：面板的类型收敛靠 `typeof config[key]` 判断，
+     * 缺了这把键就落到"原样照抄"分支，前端传字符串进来会被当成合法值写盘。
+     */
+    stopMaxBlocks: 2,
     /** 哪些路径要接管。 */
     urlPatterns: ['/v1/messages', '/chat/completions', '/v1/responses', '/v1/complete'],
     /** 这些请求是 Claude Code 自己的辅助活儿，别动它。 */
@@ -175,6 +182,15 @@ export function defaultConfig() {
     watchSettings: true,
     /** 判定流水是否落盘。 */
     eventLog: true,
+    /**
+     * 代理停下时是否把 settings.json 自动切到旁路。
+     *
+     * 不切的话，入口会继续钉在 127.0.0.1:<port> 上，代理一停整个客户端当场不可用。
+     * 开着它，`feibi-cc stop` 会把入口改回上游，关代理也能继续用。
+     */
+    bypassOnStop: true,
+    /** 旁路目标（`feibi-cc bypass --upstream … --key … --model …` 会写到这儿）。 */
+    bypass: null,
     /** 接管前的原始 baseURL，install 时记下，uninstall 时还原。 */
     originalBaseUrl: null,
     installedAt: null,

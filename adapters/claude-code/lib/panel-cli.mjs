@@ -44,12 +44,14 @@ export function showPanel(home) {
   say(`  流量 ${mode.live ? '最近有请求 ✓' : '最近没有请求 ← 桌面版可能绕过了 env'}`)
   say('')
   say('开关')
-  say(`  注入 ${onOff(config.inject)}   双段 ${onOff(config.dualLayer)}   改身份锚 ${onOff(config.rewriteIdentity)}   判定 ${onOff(config.guard)}`)
-  say(`  自动重试 ${onOff(config.autoRetry)}×${config.retryMax}   快速通道 ${onOff(config.fastPath)}   落流水 ${onOff(config.eventLog)}`)
+  say(`  注入 ${onOff(config.inject)}   双段 ${onOff(config.dualLayer)}   改身份锚 ${onOff(config.rewriteIdentity)}   身份守卫 ${onOff(config.identityGuard)}`)
+  say(`  判定 ${onOff(config.guard)}   自动重试 ${onOff(config.autoRetry)}×${config.retryMax}   快速通道 ${onOff(config.fastPath)}`)
+  say(`  判定后断上游 ${onOff(config.abortUpstream)}   盯 settings ${onOff(config.watchSettings)}   写 CLAUDE.md ${onOff(config.memoryInject)}   落流水 ${onOff(config.eventLog)}`)
   say('')
   say('参数')
-  say(`  判定窗口 ${config.scanChars} 字   放行阈值 ${config.releaseChars} 字   严格度 ${config.strictness ?? 'standard'}`)
-  say(`  Stop 劝回上限 ${config.stopMaxBlocks ?? 2} 次/轮   强制模型 ${config.forceModel || '（不改）'}`)
+  say(`  判定窗口 ${config.scanChars} 字   放行阈值 ${config.releaseChars} 字   快速探测 ${config.fastProbeChars} 字`)
+  say(`  严格度 ${config.strictness ?? 'standard'}   重试用光 ${config.exhaustedMode ?? 'notice'}   Stop 劝回上限 ${config.stopMaxBlocks ?? 2} 次/轮`)
+  say(`  强制模型 ${config.forceModel || '（不改）'}   额外模型 ${(config.modelsExtra ?? []).join(', ') || '（无）'}`)
   say('')
   const stats = mode.proxy ?? {}
   say(`计数   注入 ${stats.injected ?? 0} · 判定 ${stats.judged ?? 0} · 拦截 ${stats.blocked ?? 0} · 重试 ${stats.retried ?? 0}`)
@@ -79,7 +81,7 @@ export function showPanel(home) {
  * @param {string} home - 家目录。
  * @returns {number} 退出码。
  */
-export function setConfig(positional, home) {
+export async function setConfig(positional, home) {
   if (positional.length === 0) {
     process.stderr.write('用法：feibi-cc set key=value [key=value ...]\n例：feibi-cc set strictness=max retryMax=3\n')
     return 1
@@ -97,12 +99,49 @@ export function setConfig(positional, home) {
     else if (raw !== '' && !Number.isNaN(Number(raw))) patch[key] = Number(raw)
     else patch[key] = raw
   }
+  // 代理在跑就打它的接口：磁盘改了但进程不认，是面板上最常见的"点了没反应"。
+  const live = await postReachable(loadConfig(home).port, patch)
+  if (live !== null) {
+    if (!live.ok) {
+      process.stderr.write(`没改成：${live.error}\n`)
+      return 1
+    }
+    const applied = Object.entries(live.applied).map(([key, value]) => `${key}=${formatValue(value)}`).join('  ')
+    say(`已生效（代理在线，立刻生效）：${applied}`)
+    return 0
+  }
+
+  // 代理没在跑：写盘即可，下次启动自然读到。
   const result = applyConfigPatch(home, patch)
   if (!result.ok) {
     process.stderr.write(`没改成：${result.error}\n`)
     return 1
   }
-  const applied = Object.entries(result.applied).map(([key, value]) => `${key}=${value}`).join('  ')
-  say(`已生效：${applied}`)
+  const applied = Object.entries(result.applied).map(([key, value]) => `${key}=${formatValue(value)}`).join('  ')
+  say(`已写入配置（代理没在跑，下次启动生效）：${applied}`)
   return 0
+}
+
+/** 把各种值打成一行可读文本。 */
+function formatValue(value) {
+  return Array.isArray(value) ? `[${value.join(', ')}]` : String(value)
+}
+
+/**
+ * 把补丁发给正在运行的代理。
+ *
+ * 返回 null 表示端口上没人（代理没起），交给调用方走写盘兜底。
+ */
+async function postReachable(port, patch) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/feibi/api/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+      signal: AbortSignal.timeout(5000),
+    })
+    return await response.json()
+  } catch {
+    return null
+  }
 }

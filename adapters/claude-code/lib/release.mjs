@@ -68,6 +68,16 @@ export function releaseSettings(options = {}) {
     return { ok: false, error: `写入失败：${error instanceof Error ? error.message : String(error)}` }
   }
 
+  // 插件标记也关掉：release 的语义是"整套停用"，
+  // 否则 enabledPlugins 还是 true，用户会看到插件开着但代理已退的怪状态。
+  settings.enabledPlugins = settings.enabledPlugins !== null && typeof settings.enabledPlugins === 'object' ? settings.enabledPlugins : {}
+  settings.enabledPlugins['feibi-breaker@feibi-breaker'] = false
+  try {
+    fs.writeFileSync(paths.claudeSettings, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
+  } catch {
+    // 上面已经写过一次，这里失败不影响主要目标
+  }
+
   // 关掉巡检与直连记录：从这一刻起，settings.json 归别人管，我们不再改它。
   config.watchSettings = false
   delete config.direct

@@ -382,11 +382,29 @@ export function uninstall(options = {}) {
  * @param {object} options - {home}
  * @returns {object} 结果。
  */
+/** 插件启用键。 */
+const PLUGIN_KEY = 'feibi-breaker@feibi-breaker'
+
+/** 把插件启用标记写成指定值。 */
+function setPluginEnabled(home, enabled) {
+  const paths = feibiPaths(home)
+  const read = readClaudeSettings(paths.claudeSettings)
+  if (!read.ok) return { ok: false, error: read.error }
+  const data = read.data
+  data.enabledPlugins = data.enabledPlugins !== null && typeof data.enabledPlugins === 'object' ? data.enabledPlugins : {}
+  data.enabledPlugins[PLUGIN_KEY] = enabled === true
+  writeClaudeSettings(paths.claudeSettings, data)
+  return { ok: true }
+}
+
+export { PLUGIN_KEY, setPluginEnabled }
+
 export function toggle(on, options = {}) {
   const home = options.home
   const config = loadConfig(home)
   if (on) {
     config.watchSettings = true
+    setPluginEnabled(home, true)
     const pointed = pointSettingsAtProxy(config, home)
     saveConfig(config, home)
     return { ok: pointed.ok, baseUrl: pointed.baseUrl, error: pointed.error }
