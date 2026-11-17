@@ -826,8 +826,11 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
 <div class="toast" id="toast"></div>
 
 <script>
-/* 把运行时错误显示出来：白页是最难排查的失败形态 */
-window.addEventListener('error', function (e) {
+/* 把运行时错误显示出来：白页是最难排查的失败形态。
+   注意：这段是 JS 源码，会被塞进 HTML，所以换行用 String.fromCharCode(10)，
+   不要在字符串里写反斜杠 n —— 外层是模板字符串，两级转义一错就变成真换行，
+   整个脚本直接 SyntaxError，页面就只剩静态骨架（踩过）。 */
+function __feibiShowPanelError(line) {
   var box = document.getElementById('__feibiPanelError')
   if (!box) {
     box = document.createElement('pre')
@@ -835,17 +838,13 @@ window.addEventListener('error', function (e) {
     box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;margin:0;padding:10px 14px;background:#3b1218;color:#ffb4b4;border-top:1px solid #f85149;font:12px/1.5 ui-monospace,Consolas,monospace;z-index:9999;white-space:pre-wrap'
     document.body.appendChild(box)
   }
-  box.textContent += '[面板脚本错误] ' + (e.message || e.error) + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0) + '\n'
+  box.textContent += line + String.fromCharCode(10)
+}
+window.addEventListener('error', function (e) {
+  __feibiShowPanelError('[面板脚本错误] ' + (e.message || e.error) + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0))
 })
 window.addEventListener('unhandledrejection', function (e) {
-  var box = document.getElementById('__feibiPanelError')
-  if (!box) {
-    box = document.createElement('pre')
-    box.id = '__feibiPanelError'
-    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;margin:0;padding:10px 14px;background:#3b1218;color:#ffb4b4;border-top:1px solid #f85149;font:12px/1.5 ui-monospace,Consolas,monospace;z-index:9999;white-space:pre-wrap'
-    document.body.appendChild(box)
-  }
-  box.textContent += '[未处理的 Promise 拒绝] ' + (e.reason && (e.reason.stack || e.reason.message || e.reason)) + '\n'
+  __feibiShowPanelError('[未处理的 Promise 拒绝] ' + (e.reason && (e.reason.stack || e.reason.message || e.reason)))
 })
 var $ = function (id) { return document.getElementById(id); };
 var state = null;
