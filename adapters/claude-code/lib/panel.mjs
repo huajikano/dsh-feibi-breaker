@@ -33,6 +33,7 @@ import { feibiPaths, loadConfig, saveConfig, loadState, readJson, writeAtomic } 
 import { resolvePrompt, savePrompt, resetPrompt } from './prompt-store.mjs'
 import { readEvents } from './stats.mjs'
 import { enforceTakeover } from './install.mjs'
+import { enableBypass, disableBypass } from './direct.mjs'
 
 /** 插件版本：从 package.json 读，别再往页面里写死。 */
 const VERSION = (() => {
@@ -71,6 +72,7 @@ const SCHEMA = {
   fastPath: { type: 'bool' },
   abortUpstream: { type: 'bool' },
   watchSettings: { type: 'bool' },
+  bypassOnStop: { type: 'bool' },
   memoryInject: { type: 'bool' },
   eventLog: { type: 'bool' },
 
@@ -222,6 +224,11 @@ export function panelState({ home, config }) {
       live,
       lastSeen: proxyStats.lastEventAt ?? null,
       model: config.forceModel || settings?.env?.ANTHROPIC_MODEL || settings?.env?.ANTHROPIC_DEFAULT_SONNET_MODEL || null,
+      // 客户端实际发来的模型名：和上面那个不一样，就说明 forceModel 正在改写。
+      requestedModel: settings?.env?.ANTHROPIC_MODEL ?? settings?.env?.ANTHROPIC_DEFAULT_SONNET_MODEL ?? null,
+      pid: (() => {
+        try { return Number(fs.readFileSync(paths.pid, 'utf8').trim()) || null } catch { return null }
+      })(),
       proxy: proxyStats,
     },
     config: view,
@@ -233,7 +240,9 @@ export function panelState({ home, config }) {
       text: resolved.text,
     },
     plugin: pluginState(home),
-    events: readEvents(20, home),
+    // 取多一点：「模型改写」每个辅助请求都写一条，只取 20 条的话
+    // 真正的拦截/注入几秒就被挤出窗口，面板上看起来像什么都没发生。
+    events: readEvents(200, home),
   }
 }
 
@@ -315,9 +324,14 @@ export function writeApiKey(home, key) {
 export async function selfTest({ port, model, key, timeoutMs = 90000 }) {
   const body = {
     model,
-    max_tokens: 60,
+    // 推理模型会先花掉一大截预算在思维上；给 60 的结果是只拿到思维块、
+    // 正文一个字没有，自检就报"署名缺失"——假阴性。给足。
+    max_tokens: 800,
     stream: true,
-    system: 'You are a coding agent.',
+    // 必须是**和真实桌面端一致**的身份锚：rewriteIdentity 找的正是 "You are Claude Code…"
+    // 这句。写成 "You are a coding agent" 之类的玩具 anchor，改写不会触发，
+    // 自检就会报"注入没压住"，而真实链路其实是好的——这种误报比不测更坑。
+    system: "You are Claude Code, Anthropic's official CLI for Claude.",
     messages: [{ role: 'user', content: '用一句话说明你是谁。' }],
   }
   const headers = { 'content-type': 'application/json', accept: 'text/event-stream', 'anthropic-version': '2023-06-01' }
@@ -578,6 +592,22 @@ export async function handlePanel(req, res, { home, config }) {
     return true
   }
 
+  if (route === '/feibi/api/bypass' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    if (body?.off === true) {
+      const result = disableBypass(home)
+      json(res, result.ok ? 200 : 400, result)
+      return true
+    }
+    const result = enableBypass(home, {
+      upstream: typeof body?.upstream === 'string' && body.upstream.trim().length > 0 ? body.upstream.trim() : undefined,
+      key: typeof body?.key === 'string' && body.key.trim().length > 0 ? body.key.trim() : undefined,
+      model: typeof body?.model === 'string' && body.model.trim().length > 0 ? body.model.trim() : undefined,
+    })
+    json(res, result.ok ? 200 : 400, result)
+    return true
+  }
+
   if (route === '/feibi/api/reclaim' && req.method === 'POST') {
     const result = enforceTakeover(config, home)
     json(res, 200, { ok: !result.error, ...result })
@@ -638,9 +668,42 @@ button:disabled{opacity:.5;cursor:default}
 .notice code{background:#0f141b;padding:1px 6px;border-radius:4px}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap;padding-top:14px}
 pre{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:11px;overflow:auto;max-height:280px;font-size:12px;margin:12px 0 0;white-space:pre-wrap;word-break:break-all}
-.log{font-family:ui-monospace,Consolas,monospace;font-size:12px;max-height:300px;overflow:auto;margin-top:6px}
-.log div{padding:4px 0;border-bottom:1px solid rgba(36,44,56,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log{font-family:ui-monospace,Consolas,monospace;font-size:12px;max-height:340px;overflow:auto;margin-top:8px;scrollbar-width:thin}
+.log div{padding:5px 0;border-bottom:1px solid rgba(36,44,56,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
+.log div:hover{background:rgba(124,156,255,.06)}
 .log b{font-weight:600;color:var(--dim);font-variant-numeric:tabular-nums}
+.log .k-bad{color:var(--bad)}
+.log .k-ok{color:var(--ok)}
+.log .k-warn{color:var(--warn)}
+.log .k-acc{color:var(--acc)}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px}
+.chip{background:#1b222c;border:1px solid var(--line);color:var(--dim);border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer;transition:.15s;user-select:none}
+.chip:hover{border-color:#39455a;color:var(--txt)}
+.chip.on{background:rgba(124,156,255,.16);border-color:rgba(124,156,255,.55);color:var(--txt)}
+.chip .n{color:var(--dim);font-variant-numeric:tabular-nums;margin-left:4px}
+.statbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+@media(max-width:560px){.statbar{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stat{background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.stat .n{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.25}
+.stat .t{font-size:11px;color:var(--dim);margin-top:1px}
+.stat.ok .n{color:var(--ok)}
+.stat.bad .n{color:var(--bad)}
+.stat.acc .n{color:var(--acc)}
+.result{border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin-top:12px;background:var(--card2)}
+.result.ok{border-color:rgba(63,185,80,.4)}
+.result.bad{border-color:rgba(248,81,73,.45)}
+.result .head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.result .body{font-size:12.5px;color:var(--dim);line-height:1.6;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.result .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px}
+.result .cell{background:#0f141b;border:1px solid var(--line);border-radius:7px;padding:6px 9px}
+.result .cell .k{font-size:11px;color:var(--dim)}
+.result .cell .v{font-size:13px;font-variant-numeric:tabular-nums}
+.saving{opacity:.6;pointer-events:none;transition:.15s}
+input.invalid{border-color:var(--bad)!important}
+.field-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.field-row>*{flex:none}
+.field-row>select,.field-row>input[type=text],.field-row>input[type=password]{flex:1 1 auto;min-width:0}
+.field-row>button{white-space:nowrap}
 .toast{position:fixed;right:22px;bottom:22px;background:#1f2630;border:1px solid var(--line);padding:11px 17px;border-radius:9px;opacity:0;transform:translateY(6px);transition:.2s;pointer-events:none;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .toast.show{opacity:1;transform:none}
 .toast.err{border-color:rgba(248,81,73,.6)}
@@ -668,17 +731,18 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
     <div class="row" style="border:0;padding-top:14px">
       <div class="label"><span>上游密钥</span><span class="hint" id="key-state">写入 settings.json 的 ANTHROPIC_API_KEY</span></div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div class="field-row">
       <input type="password" id="api-key" placeholder="留空并保存 = 清空" autocomplete="off" spellcheck="false">
-      <button id="btn-save-key" style="flex:none">保存密钥</button>
+      <button id="btn-save-key">保存密钥</button>
     </div>
-    <div style="margin-top:16px"></div>
-    <div class="row" style="display:block">
+    <div class="row" style="display:block;margin-top:16px">
       <div class="label"><span>模型</span><span class="hint">从上游真实可用的列表里选；客户端发什么名字都会被改写成它。留空 = 不改写</span></div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-        <select id="model-pick" data-key="forceModel" data-type="text" style="min-width:240px"><option value="">（不改写）</option></select>
+      <div class="field-row">
+        <select id="model-pick" data-key="forceModel" data-type="text"><option value="">（不改写）</option></select>
         <button type="button" id="model-refresh" title="重新问上游">刷新</button>
-        <input type="text" id="model-custom" placeholder="或手填" style="width:180px">
+      </div>
+      <div class="field-row">
+        <input type="text" id="model-custom" placeholder="或直接手填模型名">
         <button type="button" id="model-apply">用这个</button>
       </div>
     </div>
@@ -686,7 +750,14 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
       <button class="primary" id="btn-test">自检（花一次 token）</button>
       <button id="btn-reclaim">重新接管 settings</button>
     </div>
-    <pre id="test-out" style="display:none"></pre>
+    <div class="row" style="border:0;padding-top:14px">
+      <div class="label"><span>旁路</span><span class="hint" id="bypass-state">关掉代理时，让客户端直接连上游</span></div>
+    </div>
+    <div class="btn-row" style="padding-top:8px">
+      <button id="btn-bypass-on">现在切到旁路</button>
+      <button id="btn-bypass-off">收回给代理</button>
+    </div>
+    <div id="test-out"></div>
   </section>
 
   <section>
@@ -723,7 +794,19 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
 
   <section class="wide">
     <h2>计数与流水</h2>
+    <div class="statbar" id="stats"></div>
     <div id="counts"></div>
+    <div class="toolbar" id="log-toolbar">
+      <span class="chip on" data-filter="key">关键<span class="n" id="n-key">0</span></span>
+      <span class="chip" data-filter="blocked">拦截<span class="n" id="n-blocked">0</span></span>
+      <span class="chip" data-filter="pass">放行<span class="n" id="n-pass">0</span></span>
+      <span class="chip" data-filter="inject">注入<span class="n" id="n-inject">0</span></span>
+      <span class="chip" data-filter="model">模型<span class="n" id="n-model">0</span></span>
+      <span class="chip" data-filter="all">全部<span class="n" id="n-all">0</span></span>
+      <span style="flex:1"></span>
+      <button type="button" id="btn-pause" title="暂停后不再重绘，方便逐条看">暂停</button>
+      <button type="button" id="btn-clear-log">清空显示</button>
+    </div>
     <div class="log" id="log"></div>
   </section>
 </main>
@@ -732,6 +815,27 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
 <div class="toast" id="toast"></div>
 
 <script>
+/* 把运行时错误显示出来：白页是最难排查的失败形态 */
+window.addEventListener('error', function (e) {
+  var box = document.getElementById('__feibiPanelError')
+  if (!box) {
+    box = document.createElement('pre')
+    box.id = '__feibiPanelError'
+    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;margin:0;padding:10px 14px;background:#3b1218;color:#ffb4b4;border-top:1px solid #f85149;font:12px/1.5 ui-monospace,Consolas,monospace;z-index:9999;white-space:pre-wrap'
+    document.body.appendChild(box)
+  }
+  box.textContent += '[面板脚本错误] ' + (e.message || e.error) + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0) + '\n'
+})
+window.addEventListener('unhandledrejection', function (e) {
+  var box = document.getElementById('__feibiPanelError')
+  if (!box) {
+    box = document.createElement('pre')
+    box.id = '__feibiPanelError'
+    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;margin:0;padding:10px 14px;background:#3b1218;color:#ffb4b4;border-top:1px solid #f85149;font:12px/1.5 ui-monospace,Consolas,monospace;z-index:9999;white-space:pre-wrap'
+    document.body.appendChild(box)
+  }
+  box.textContent += '[未处理的 Promise 拒绝] ' + (e.reason && (e.reason.stack || e.reason.message || e.reason)) + '\n'
+})
 var $ = function (id) { return document.getElementById(id); };
 var state = null;
 var hydrated = false;
@@ -769,6 +873,7 @@ var NUMBERS = [
 
 var ADVANCED = [
   ['watchSettings','盯住 settings.json','被 CC Switch 改回时自动抢回来'],
+  ['bypassOnStop','关代理时自动切旁路','停代理后客户端继续直连上游，不会卡在死端口'],
   ['memoryInject','写进 CLAUDE.md','双保险，费 token'],
 ];
 
@@ -809,6 +914,128 @@ function hydrate(){
   hydrated = true;
 }
 
+function escapeHtml(v){
+  return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) {
+    return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c];
+  });
+}
+
+/** 判定窗口里模型偶尔会吐出 <severity>12 这种内部标记，展示前抹掉。 */
+function cleanHead(v){
+  return String(v || '').replace(/<[a-zA-Z\/][^>]{0,30}>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function fmtDuration(ms){
+  if (!isFinite(ms) || ms < 0) return '-';
+  var s = Math.floor(ms / 1000);
+  var d = Math.floor(s / 86400); s -= d * 86400;
+  var h = Math.floor(s / 3600);  s -= h * 3600;
+  var m = Math.floor(s / 60);    s -= m * 60;
+  if (d > 0) return d + '天' + h + '时';
+  if (h > 0) return h + '时' + m + '分';
+  if (m > 0) return m + '分' + s + '秒';
+  return s + '秒';
+}
+
+/**
+ * 一条流水归到哪个分组，过滤按钮靠它。
+ *
+ * 「模型」是"模型名被改写"的记录，每个辅助请求都会写一条，量最大但信息量最低；
+ * 默认的「关键」把它排除掉，不然真正的拦截/注入会被刷到看不见。
+ */
+function groupOf(e){
+  if (e.kind === 'inject') return 'inject';
+  if (e.kind === 'judge') return e.blocked ? 'blocked' : 'pass';
+  if (e.kind === 'identity') return 'blocked';
+  if (e.kind === 'model') return 'model';
+  return 'key';
+}
+
+/** 某个分组在过滤时是否命中。 */
+function matchFilter(e, filter){
+  if (filter === 'all') return true;
+  if (filter === 'key') return groupOf(e) !== 'model';
+  return groupOf(e) === filter;
+}
+
+var logFilter = 'key';
+var logPaused = false;
+var logClearedAt = 0;
+var logSig = '';
+
+function renderLog(){
+  var events = (state.events || []).filter(function (e) {
+    if (logClearedAt > 0 && Date.parse(e.at || '') <= logClearedAt) return false;
+    return matchFilter(e, logFilter);
+  }).slice().reverse();
+
+  var sig = events.length + '|' + (events[0] && events[0].at) + '|' + logFilter;
+  var box = $('log');
+  if (sig === logSig) return;
+  logSig = sig;
+
+  var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 28;
+  var prevTop = box.scrollTop;
+
+  box.innerHTML = events.map(function (e) {
+    var g = groupOf(e);
+    var kind = e.kind === 'judge'
+      ? (e.blocked ? (e.gaveUp ? '放弃' : '拦截') : '放行')
+      : (e.kind === 'identity' ? '改身份'
+        : (e.kind === 'inject' ? '注入'
+        : (e.kind === 'model' ? '模型'
+        : (e.kind === 'retry' ? '重试' : escapeHtml(e.kind)))));
+    var cls = g === 'blocked' ? 'k-bad' : (g === 'pass' ? 'k-ok' : (g === 'inject' ? 'k-acc' : 'k-warn'));
+    var head = escapeHtml(cleanHead(e.head));
+    var tip = escapeHtml(cleanHead(e.head)).slice(0, 300);
+    return '<div title="' + tip + '"><b>' + String(e.at || '').slice(11,19) + '</b> '
+      + '<span class="' + cls + '">' + kind + '</span>'
+      + (e.reason ? ' · ' + escapeHtml(e.reason) : '')
+      + (e.chars ? ' · ' + e.chars + '字' : '')
+      + (head ? ' · ' + head.slice(0, 72) : '') + '</div>';
+  }).join('') || ('<div style="color:var(--dim)">'
+    + ((state.events || []).length > 0
+      ? '这个分类眼下是空的（一共 ' + (state.events || []).length + ' 条，换个分类看看）'
+      : '还没有流水')
+    + '</div>');
+
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  else box.scrollTop = prevTop;
+}
+
+function renderCounts(){
+  var st = state.mode.proxy || {};
+  var counts = { key: 0, blocked: 0, pass: 0, inject: 0, model: 0, all: (state.events || []).length };
+  (state.events || []).forEach(function (e) {
+    var g = groupOf(e);
+    if (g === 'model') {
+      counts.model += 1;
+      return;
+    }
+    counts.key += 1;
+    if (counts[g] !== undefined) counts[g] += 1;
+  });
+  $('n-key').textContent = counts.key;
+  $('n-blocked').textContent = counts.blocked;
+  $('n-pass').textContent = counts.pass;
+  $('n-inject').textContent = counts.inject;
+  $('n-model').textContent = counts.model;
+  $('n-all').textContent = counts.all;
+
+  var started = Date.parse(st.startedAt || '');
+  var uptime = isFinite(started) ? fmtDuration(Date.now() - started) : '-';
+
+  $('stats').innerHTML =
+    '<div class="stat acc"><div class="n">' + (st.injected || 0) + '</div><div class="t">注入</div></div>' +
+    '<div class="stat"><div class="n">' + (st.judged || 0) + '</div><div class="t">判定</div></div>' +
+    '<div class="stat bad"><div class="n">' + (st.blocked || 0) + '</div><div class="t">拦截</div></div>' +
+    '<div class="stat ok"><div class="n">' + (st.retried || 0) + '</div><div class="t">重试</div></div>';
+
+  $('counts').innerHTML =
+    '<div class="kv"><span>运行</span><span>' + uptime + ' · pid ' + (st.startedAt ? (state.mode.pid || '-') : '-') + '</span></div>' +
+    '<div class="kv"><span>插件侧</span><span>注入 ' + (state.plugin.total.injected||0) + ' · 判定 ' + (state.plugin.total.judged||0) + ' · 拦回 ' + (state.plugin.total.blocked||0) + '</span></div>';
+}
+
 function refresh(){
   var s = state;
   var mode = s.mode;
@@ -820,17 +1047,22 @@ function refresh(){
   $('pill-live').className = 'badge ' + (mode.live ? 'ok' : 'warn');
   $('pill-port').textContent = ':' + mode.port;
 
+  var requested = (mode.requestedModel || '').trim();
+  var effective = (mode.model || '').trim();
+  var rewritten = requested && effective && requested !== effective;
+
   $('mode').innerHTML =
     (mode.takeover && !mode.live
       ? '<div class="notice"><b>代理没收到流量</b><br>settings 的 baseURL 指向本代理，但最近 15 分钟没有请求进来。'
         + '桌面版只在启动时读一次 env，改完必须完全退出再开。'
         + '<br>目标入口：<code>http://127.0.0.1:' + mode.port + '</code></div>'
       : '') +
-    '<div class="kv"><span>settings 入口</span><span>' + (mode.baseUrl || '未设置') + '</span></div>' +
+    '<div class="kv"><span>settings 入口</span><span>' + escapeHtml(mode.baseUrl || '未设置') + '</span></div>' +
     '<div class="kv"><span>接管</span>' + badge(mode.takeover, '已接管', '没接管') + '</div>' +
     '<div class="kv"><span>流量</span>' + badge(mode.live, '最近有请求', '最近没有请求') + '</div>' +
-    '<div class="kv"><span>生效上游</span><span>' + mode.upstream + '</span></div>' +
-    '<div class="kv"><span>模型</span><span>' + (mode.model || '-') + '</span></div>' +
+    '<div class="kv"><span>生效上游</span><span>' + escapeHtml(mode.upstream) + '</span></div>' +
+    '<div class="kv"><span>发给上游的模型</span><span>' + escapeHtml(effective || '-') + '</span></div>' +
+    (rewritten ? '<div class="kv"><span>客户端要的模型</span><span style="color:var(--warn)">' + escapeHtml(requested) + ' → 已改写</span></div>' : '') +
     '<div class="kv"><span>提示词</span><span>' + ({custom:'自定义',default:'内置默认',empty:'空（不会注入！）'}[s.prompt.source] || s.prompt.source) + ' · ' + s.prompt.chars + ' 字</span></div>';
 
   $('prompt-meta').textContent = '· ' + (s.prompt.file || '') + ' · ' + s.prompt.hash;
@@ -839,21 +1071,8 @@ function refresh(){
     ? '当前：' + s.apiKey.masked
     : '未设置 —— 换中转站时这里和上游地址要一起改';
 
-  var st = s.mode.proxy || {};
-  $('counts').innerHTML =
-    '<div class="kv"><span>代理侧</span><span>注入 ' + (st.injected||0) + ' · 判定 ' + (st.judged||0) + ' · 拦 ' + (st.blocked||0) + ' · 重试 ' + (st.retried||0) + '</span></div>' +
-    '<div class="kv"><span>插件侧</span><span>注入 ' + (s.plugin.total.injected||0) + ' · 判定 ' + (s.plugin.total.judged||0) + ' · 拦回 ' + (s.plugin.total.blocked||0) + '</span></div>';
-
-  $('log').innerHTML = (s.events || []).slice().reverse().map(function (e) {
-    var kind = e.kind === 'judge'
-      ? (e.blocked ? (e.gaveUp ? '放弃' : '拦') : '放行')
-      : (e.kind === 'identity' ? '改身份' : (e.kind === 'inject' ? '注入' : e.kind));
-    var head = String(e.head || '').replace(/[<>&]/g, function (c) { return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c]; });
-    return '<div><b>' + String(e.at || '').slice(11,19) + '</b> ' + kind
-      + (e.reason ? ' · ' + e.reason : '')
-      + (e.chars ? ' · ' + e.chars + '字' : '')
-      + (head ? ' · ' + head.slice(0, 60) : '') + '</div>';
-  }).join('') || '<div style="color:var(--dim)">还没有流水</div>';
+  renderCounts();
+  if (!logPaused) renderLog();
 }
 
 /* ---------- 读 / 写 ---------- */
@@ -887,10 +1106,27 @@ document.addEventListener('change', function (e) {
   if (!key) return;
   var type = el.getAttribute('data-type');
   var value;
-  if (el.type === 'checkbox') value = el.checked;
-  else if (type === 'array') value = el.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-  else if (type === 'number') value = Number(el.value);
-  else value = el.value;
+
+  if (el.type === 'checkbox') {
+    value = el.checked;
+  } else if (type === 'array') {
+    value = el.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  } else if (type === 'number') {
+    // 清空或乱填时不要把 0 偷偷塞进去：标红、回滚，等人自己改对。
+    var raw = String(el.value).trim();
+    var num = Number(raw);
+    if (raw === '' || !isFinite(num)) {
+      el.classList.add('invalid');
+      toast('请填一个数字', true);
+      setTimeout(function () { el.classList.remove('invalid'); }, 1200);
+      el.value = state.config[key] ?? '';
+      return;
+    }
+    el.classList.remove('invalid');
+    value = num;
+  } else {
+    value = el.value;
+  }
   patch(key, value);
 });
 
@@ -908,17 +1144,38 @@ $('btn-reset').onclick = async function () {
   await load(true);
 };
 
+function cell(k, v){
+  return '<div class="cell"><div class="k">' + k + '</div><div class="v">' + escapeHtml(v) + '</div></div>';
+}
+
+function renderTestResult(d){
+  var ok = d.ok === true;
+  return '<div class="result ' + (ok ? 'ok' : 'bad') + '">'
+    + '<div class="head">'
+      + badge(ok, '链路通', '没通')
+      + (d.signature ? '<span class="badge ok">署名在</span>' : '<span class="badge warn">署名缺失</span>')
+    + '</div>'
+    + '<div class="grid">'
+      + cell('状态码', d.status ?? '-')
+      + cell('耗时', d.ms ? d.ms + ' ms' : '-')
+      + cell('模型', d.model || '-')
+      + cell('署名', d.signature ? '有' : '无')
+    + '</div>'
+    + '<div class="body">' + escapeHtml(d.error || d.preview || '（没有正文）') + '</div>'
+    + '</div>';
+}
+
 $('btn-test').onclick = async function () {
   var out = $('test-out');
-  out.style.display = 'block';
-  out.textContent = '发请求中…（最多等 90 秒）';
+  out.innerHTML = '<div class="result"><div class="head"><span class="badge warn">发请求中…</span></div>'
+    + '<div class="body">最多等 90 秒；结果会写入流水。</div></div>';
   try {
     var r = await fetch('/feibi/api/selftest', { method:'POST' });
     var data = await r.json();
-    out.textContent = JSON.stringify(data, null, 2);
+    out.innerHTML = renderTestResult(data);
     toast(data.ok ? ('通了 · ' + data.ms + 'ms · 署名' + (data.signature ? '有' : '无')) : '没通，看下面详情', !data.ok);
   } catch (err) {
-    out.textContent = '请求失败：' + err;
+    out.innerHTML = '<div class="result bad"><div class="body">' + escapeHtml('请求失败：' + err) + '</div></div>';
   }
   await load();
 };
@@ -930,6 +1187,21 @@ $('btn-save-key').onclick = async function () {
   toast(out.ok ? (value ? '密钥已保存' : '密钥已清空') : ('失败：' + out.error), !out.ok);
   if (out.ok) $('api-key').value = '';
   await load();
+};
+
+$('btn-bypass-on').onclick = async function () {
+  var r = await fetch('/feibi/api/bypass', { method:'POST', headers:{'content-type':'application/json'}, body: '{}' });
+  var out = await r.json();
+  if (!out.ok) { toast('没切成：' + out.error, true); return; }
+  toast('已切到旁路：' + out.upstream);
+  await load(true);
+};
+
+$('btn-bypass-off').onclick = async function () {
+  var r = await fetch('/feibi/api/bypass', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ off: true }) });
+  var out = await r.json();
+  toast(out.ok ? '入口已收回代理' : ('失败：' + out.error), !out.ok);
+  await load(true);
 };
 
 $('btn-reclaim').onclick = async function () {
@@ -979,6 +1251,39 @@ $('model-apply').onclick = async function () {
 
 $('model-pick').addEventListener('change', function () {
   if ($('model-pick').value) $('model-custom').value = '';
+});
+
+/* ---------- 流水工具栏 ---------- */
+document.querySelectorAll('#log-toolbar .chip').forEach(function (chip) {
+  chip.onclick = function () {
+    logFilter = chip.getAttribute('data-filter');
+    document.querySelectorAll('#log-toolbar .chip').forEach(function (c) {
+      c.classList.toggle('on', c === chip);
+    });
+    logSig = '';
+    renderLog();
+  };
+});
+
+$('btn-pause').onclick = function () {
+  logPaused = !logPaused;
+  $('btn-pause').textContent = logPaused ? '继续' : '暂停';
+  $('btn-pause').classList.toggle('primary', logPaused);
+  if (!logPaused) { logSig = ''; renderLog(); }
+};
+
+$('btn-clear-log').onclick = function () {
+  logClearedAt = Date.now();
+  logSig = '';
+  renderLog();
+};
+
+/* 改完提示词按 Ctrl+S 直接存，省得滚回去找按钮 */
+document.addEventListener('keydown', function (e) {
+  if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's') {
+    e.preventDefault();
+    $('btn-save').click();
+  }
 });
 
 refreshModelPick();

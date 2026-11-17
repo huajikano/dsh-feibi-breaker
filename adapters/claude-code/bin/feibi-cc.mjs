@@ -559,15 +559,23 @@ function cmdPlugin(positional, flags, home) {
  * @returns {string|null} 快捷方式路径。
  */
 function writePanelShortcut(port) {
-  try {
-    const desktop = path.join(process.env.USERPROFILE ?? '', 'Desktop')
-    if (!fs.existsSync(desktop)) return null
-    const file = path.join(desktop, '菲比破限面板.url')
-    fs.writeFileSync(file, `[InternetShortcut]\r\nURL=http://127.0.0.1:${port}/feibi/panel\r\nIconIndex=0\r\n`, 'utf8')
-    return file
-  } catch {
-    return null
+  // 桌面 + 开始菜单各放一个。桌面是双击习惯，开始菜单保证被清理掉之后还能找到。
+  const targets = [
+    path.join(process.env.USERPROFILE ?? '', 'Desktop'),
+    path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+  ]
+  let first = null
+  for (const dir of targets) {
+    try {
+      if (!fs.existsSync(dir)) continue
+      const file = path.join(dir, '菲比破限面板.url')
+      fs.writeFileSync(file, `[InternetShortcut]\r\nURL=http://127.0.0.1:${port}/feibi/panel\r\nIconIndex=0\r\n`, 'utf8')
+      if (first === null) first = file
+    } catch {
+      // 单个目录写不进去不影响另一个
+    }
   }
+  return first
 }
 
 /**
@@ -587,7 +595,7 @@ async function cmdPanel(flags, home) {
   say('设置面板地址（复制到浏览器，或在桌面双击「菲比破限面板」）：')
   say(`  ${url}`)
   // 桌面快捷方式改成显式要才建：默认往桌面上丢东西是打扰。
-  if (flags.shortcut === true) {
+  if (flags.shortcut !== false) {
     const shortcut = writePanelShortcut(port)
     if (shortcut !== null) say(`已放桌面快捷方式：${shortcut}`)
   }
