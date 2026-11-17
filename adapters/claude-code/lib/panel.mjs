@@ -672,6 +672,16 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
       <input type="password" id="api-key" placeholder="留空并保存 = 清空" autocomplete="off" spellcheck="false">
       <button id="btn-save-key" style="flex:none">保存密钥</button>
     </div>
+    <div style="margin-top:16px"></div>
+    <div class="row" style="display:block">
+      <div class="label"><span>模型</span><span class="hint">从上游真实可用的列表里选；客户端发什么名字都会被改写成它。留空 = 不改写</span></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <select id="model-pick" data-key="forceModel" data-type="text" style="min-width:240px"><option value="">（不改写）</option></select>
+        <button type="button" id="model-refresh" title="重新问上游">刷新</button>
+        <input type="text" id="model-custom" placeholder="或手填" style="width:180px">
+        <button type="button" id="model-apply">用这个</button>
+      </div>
+    </div>
     <div class="btn-row">
       <button class="primary" id="btn-test">自检（花一次 token）</button>
       <button id="btn-reclaim">重新接管 settings</button>
@@ -689,15 +699,6 @@ footer{padding:14px 24px 26px;color:var(--dim);font-size:12px;border-top:1px sol
     <div id="numbers"></div>
     <div class="row"><div class="label"><span>严格度</span><span class="hint">standard 只放规则 / strict 禁反问 / max 禁缩减与半成品</span></div>
       <select data-key="strictness"><option value="standard">standard</option><option value="strict">strict</option><option value="max">max</option></select></div>
-    <div class="row" style="display:block">
-      <div class="label"><span>模型</span><span class="hint">从上游真实可用的列表里选；客户端发什么名字都会被改写成它。留空 = 不改写</span></div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-        <select id="model-pick" data-key="forceModel" data-type="text" style="min-width:240px"><option value="">（不改写）</option></select>
-        <button type="button" id="model-refresh" title="重新问上游">刷新</button>
-        <input type="text" id="model-custom" placeholder="或手填" style="width:180px">
-        <button type="button" id="model-apply">用这个</button>
-      </div>
-    </div>
     <div class="row"><div class="label"><span>重试用光后</span><span class="hint">notice 给说明 / pass 原样放出去</span></div>
       <select data-key="exhaustedMode"><option value="notice">notice</option><option value="pass">pass</option></select></div>
   </section>
