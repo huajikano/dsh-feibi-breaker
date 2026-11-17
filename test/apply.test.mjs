@@ -404,7 +404,7 @@ test('all three prompt payloads are byte-identical', () => {
 test('the prompt carries the Discord banner, and no stale Telegram banner', () => {
   const core = loadCore()
   for (const [name, text] of Object.entries(core.prompt)) {
-    assert.ok(text.includes('Discord交流群@JZZwqDNN2'), `${name} is missing the Discord banner`)
+    assert.ok(text.includes('Discord交流群@https://discord.gg/Mw97ZdVaFn'), `${name} is missing the Discord banner`)
     assert.equal(text.includes('FJNB22'), false, `${name} still carries the Telegram banner`)
     assert.equal(text.includes('TG交流群'), false, `${name} still carries the Telegram label`)
   }
