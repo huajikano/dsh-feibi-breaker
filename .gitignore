@@ -19,3 +19,5 @@ tools/pack-core.mjs
 audit*.jsonl
 
 adapters/claude-code/dist/
+
+adapters/claude-desktop-bundle/dist/
