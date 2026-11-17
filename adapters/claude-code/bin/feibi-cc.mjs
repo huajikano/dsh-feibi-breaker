@@ -27,11 +27,21 @@ import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/p
 import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, enforceDirectEnv, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
 import { statusLine } from '../lib/statusline.mjs'
 import { showPanel, setConfig } from '../lib/panel-cli.mjs'
+import { listUpstreamModels } from '../lib/panel.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
 import { enableDirect, disableDirect } from '../lib/direct.mjs'
 import { readEvents } from '../lib/stats.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
+
+/** 版本号从 package.json 读，避免和面板显示的版本对不上。 */
+const VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8')).version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
 
 /** 解析 argv 里的 `--key value` 与 `--flag`。 */
 function parseArgs(argv) {
@@ -558,7 +568,7 @@ async function cmdStatus(home) {
 
   say('菲比破限 · Claude Code Desktop')
   say('='.repeat(52))
-  say(`版本       1.0.0`)
+  say(`版本       ${VERSION}`)
   say(`家目录     ${paths.root}`)
   say(`端口       ${config.port}`)
   say(`上游       ${config.upstream}`)
@@ -735,6 +745,31 @@ async function cmdProbe(flags, home) {
 // main
 // ---------------------------------------------------------------------------
 
+
+/** 列出上游真实可用的模型名（面板里那个下拉的终端版）。 */
+async function cmdModels(home) {
+  const config = loadConfig(home)
+  const paths = feibiPaths(home)
+  const settings = JSON.parse(fs.readFileSync(paths.claudeSettings, 'utf8'))
+  const key = settings?.env?.ANTHROPIC_API_KEY ?? settings?.env?.ANTHROPIC_AUTH_TOKEN ?? ''
+  say("上游 " + config.upstream)
+  const result = await listUpstreamModels({ upstream: config.upstream, key })
+  if (!result.ok) {
+    process.stderr.write("拿不到列表：" + result.error + "\n")
+    return 1
+  }
+  const usable = new Set(result.usable ?? result.models)
+  for (const id of result.models) {
+    const mark = id === config.forceModel ? "*" : " "
+    const ok = usable.has(id) ? "✓" : "✗"
+    say(`  ${mark} ${ok} ${id}`)
+  }
+  say("")
+  say("当前改写目标：" + (config.forceModel || "（不改写）"))
+  say("切换：feibi-cc set forceModel=<名字>")
+  return 0
+}
+
 async function main() {
   const [, , command = 'status', ...rest] = process.argv
   const { flags, rest: positional } = parseArgs(rest)
@@ -753,6 +788,7 @@ async function main() {
     case 'statusline': return cmdStatusline(home)
     case 'show': showPanel(home); return 0
     case 'set': return setConfig(positional, home)
+    case 'models': return cmdModels(home)
     case 'direct': return cmdDirect(flags, home)
     case 'undirect': return cmdUndirect(home)
     case 'status': return cmdStatus(home)
@@ -771,6 +807,7 @@ async function main() {
       say('  plugin    install|uninstall|status   装成 Claude Code 插件（hook 形态，推荐）')
       say('  show      在终端打印设置面板（状态 + 开关 + 最近判定）')
       say('  set       改配置，例：feibi-cc set strictness=max retryMax=3')
+      say('  models    列出上游真实可用的模型名')
       say('  panel     打开网页设置面板（浏览器，本机 127.0.0.1）')
       say('  statusline 打印状态条那一行（给 settings.json 用）')
       say('  direct    旁路中间层，直连一个确定能用的端点（--upstream --key --model）')
