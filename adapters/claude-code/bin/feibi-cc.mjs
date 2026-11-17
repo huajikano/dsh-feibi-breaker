@@ -19,7 +19,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { feibiPaths, loadConfig, saveConfig, loadState } from '../lib/config.mjs'
 import { createProxy } from '../lib/proxy.mjs'
@@ -29,7 +29,7 @@ import { statusLine } from '../lib/statusline.mjs'
 import { showPanel, setConfig } from '../lib/panel-cli.mjs'
 import { listUpstreamModels } from '../lib/panel.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
-import { enableDirect, disableDirect } from '../lib/direct.mjs'
+import { enableDirect, disableDirect, enableBypass, disableBypass } from '../lib/direct.mjs'
 import { readEvents } from '../lib/stats.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -132,7 +132,53 @@ async function healthFrom(baseUrl) {
 // serve / start / stop
 // ---------------------------------------------------------------------------
 
+/**
+ * 看门狗（不需要管理员）：父进程守着子进程，子进程挂了立刻重拉。
+ *
+ * 为什么不用计划任务：schtasks /Create 在这台机器上直接"拒绝访问"，
+ * 而"代理被杀 → 会话断联"这件事必须有人管。父子进程最简单：
+ * Startup 里起的是父进程，父进程只干一件事——保证 serve 一直在。
+ */
+async function supervise(flags, home) {
+  const config = loadConfig(home)
+  const port = Number(flags.port) > 0 ? Number(flags.port) : config.port
+  const log = makeLogger(home, flags.quiet === true)
+  let backoff = 1000
+
+  log(`看门狗启动：守着 :${port}（父进程 pid ${process.pid}）`)
+
+  const shutdown = () => {
+    log('看门狗收到停止信号，退出。')
+    process.exit(0)
+  }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+
+  for (;;) {
+    const startedAt = Date.now()
+    const child = spawn(process.execPath, [SELF, 'serve', '--quiet', '--port', String(port)], {
+      stdio: 'ignore',
+      cwd: PROJECT_ROOT,
+      windowsHide: true,
+    })
+    log(`子进程已启动 pid ${child.pid}`)
+
+    const exitCode = await new Promise((resolve) => {
+      child.on('exit', (code, signal) => resolve(code ?? signal ?? 0))
+    })
+
+    const lived = Date.now() - startedAt
+    log(`子进程退出（code=${exitCode}，存活 ${Math.round(lived / 1000)}s）`)
+
+    // 刚起来就死的（端口冲突、配置坏）不能狂重启，退避到最多 30 秒
+    backoff = lived < 5000 ? Math.min(backoff * 2, 30000) : 1000
+    await new Promise((resolve) => setTimeout(resolve, backoff))
+  }
+}
+
 async function cmdServe(flags, home) {
+  if (flags.supervise === true) return supervise(flags, home)
+
   const config = loadConfig(home)
   if (Number(flags.port) > 0) config.port = Number(flags.port)
   const quiet = flags.quiet === true
@@ -150,6 +196,9 @@ async function cmdServe(flags, home) {
     ;({ port } = await proxy.listen(config.port))
   } catch (error) {
     process.stderr.write(`端口 ${config.port} 起不来：${error instanceof Error ? error.message : String(error)}\n`)
+    // 起不来也不能把人晾在死端口上：顺手切旁路，客户端至少还能用。
+    const bypass = enableBypass(home)
+    if (bypass.ok) process.stderr.write(`已自动切到旁路：${bypass.upstream}\n`)
     return 1
   }
 
@@ -228,7 +277,7 @@ async function cmdStart(flags, home) {
     say(`已经在跑：http://127.0.0.1:${config.port}（pid ${existing.pid}）`)
     return 0
   }
-  const child = spawn(process.execPath, [SELF, 'serve', '--quiet', '--port', String(config.port)], {
+  const child = spawn(process.execPath, [SELF, 'serve', '--supervise', '--quiet', '--port', String(config.port)], {
     detached: true,
     stdio: 'ignore',
     cwd: PROJECT_ROOT,
@@ -242,6 +291,9 @@ async function cmdStart(flags, home) {
     const up = await health(config.port)
     if (up !== null) {
       say(`代理已后台启动：http://127.0.0.1:${config.port}（pid ${up.pid}）`)
+      // 之前切过旁路的话，把入口收回代理，否则流量会一直绕过它。
+      const back = disableBypass(home)
+      if (back.ok && back.baseUrl) say(`  入口已指回代理：${back.baseUrl}`)
       return 0
     }
   }
@@ -249,7 +301,8 @@ async function cmdStart(flags, home) {
   return 1
 }
 
-async function cmdStop(home) {  const config = loadConfig(home)
+async function cmdStop(home) {
+  const config = loadConfig(home)
   const paths = feibiPaths(home)
   const up = await health(config.port)
   let pid = up?.pid ?? null
@@ -262,16 +315,86 @@ async function cmdStop(home) {  const config = loadConfig(home)
   }
   if (!pid) {
     say('没有在跑的代理。')
-    return 0
+  } else {
+    // 先收看门狗父进程：只杀子进程的话，它 1 秒内又把 serve 拉起来，
+    // 而 stop 之后的旁路切换又会让客户端带着 claude-* 直连上游。两件事撞一起
+    // 就是"会话突然断联"。
+    try {
+      const parentId = Number(execFileSync('powershell', ['-NoProfile', '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`], { encoding: 'utf8', windowsHide: true }).trim())
+      if (Number.isFinite(parentId) && parentId > 0) {
+        const parentCmd = execFileSync('powershell', ['-NoProfile', '-Command',
+          `(Get-CimInstance Win32_Process -Filter "ProcessId=${parentId}").CommandLine`], { encoding: 'utf8', windowsHide: true })
+        if (parentCmd.includes('--supervise')) {
+          process.kill(parentId)
+          say(`已停止看门狗父进程 pid ${parentId}。`)
+        }
+      }
+    } catch {
+      // 拿不到父进程信息不影响停子进程
+    }
+    try {
+      process.kill(pid)
+      say(`已停止 pid ${pid}。`)
+    } catch (error) {
+      process.stderr.write(`停不掉 pid ${pid}：${error instanceof Error ? error.message : String(error)}\n`)
+      return 1
+    }
+    try { fs.unlinkSync(paths.pid) } catch { /* ignore */ }
   }
-  try {
-    process.kill(pid)
-    say(`已停止 pid ${pid}。`)
-  } catch (error) {
-    process.stderr.write(`停不掉 pid ${pid}：${error instanceof Error ? error.message : String(error)}\n`)
+
+  // 代理没了，入口还钉在死端口上的话客户端当场不可用。默认顺手切旁路。
+  if (config.bypassOnStop !== false) {
+    const bypass = enableBypass(home)
+    if (bypass.ok) {
+      say(`已切到旁路：${bypass.upstream}${bypass.model ? `（${bypass.model}）` : ''}`)
+      say('  客户端继续可用，不经过本代理。想回到代理：feibi-cc resume')
+    } else {
+      process.stderr.write(`旁路没切成：${bypass.error}\n`)
+      process.stderr.write('  先设一个：feibi-cc bypass --upstream https://… --key … --model …\n')
+    }
+  }
+  return 0
+}
+
+/**
+ * 切到旁路：入口直接指上游，不经过本代理。
+ *
+ * @param {object} flags - 参数。
+ * @param {string} home - 家目录。
+ * @returns {number} 退出码。
+ */
+function cmdBypass(flags, home) {
+  const result = enableBypass(home, {
+    upstream: typeof flags.upstream === 'string' ? flags.upstream : undefined,
+    key: typeof flags.key === 'string' ? flags.key : undefined,
+    model: typeof flags.model === 'string' ? flags.model : undefined,
+  })
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`)
     return 1
   }
-  try { fs.unlinkSync(paths.pid) } catch { /* ignore */ }
+  say(`已切到旁路：${result.upstream}`)
+  if (result.model) say(`  模型：${result.model}`)
+  say(`  密钥：${result.keyed ? '已写入 settings.json' : '沿用原有设置'}`)
+  say('  代理可以关了；想回来：feibi-cc resume')
+  return 0
+}
+
+/**
+ * 撤掉旁路：入口改回本代理。
+ *
+ * @param {string} home - 家目录。
+ * @returns {number} 退出码。
+ */
+function cmdResume(home) {
+  const result = disableBypass(home)
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`)
+    return 1
+  }
+  say(`入口已改回代理：${result.baseUrl}`)
+  say('  代理没在跑的话先 feibi-cc start')
   return 0
 }
 
@@ -770,6 +893,94 @@ async function cmdModels(home) {
   return 0
 }
 
+
+// ---------------------------------------------------------------------------
+// ensure / watchdog：把"代理被杀了、settings 被改回直连"这类断联自动拉回来
+// ---------------------------------------------------------------------------
+
+/**
+ * 自愈：一次调用把该有的状态都补齐。
+ *
+ * 真机踩过两次"会话突然用不了"，都是同一类：代理进程没了（pid 文件空、无日志），
+ * 而 settings.json 被 CC Switch 写回成供应商直连地址，客户端就带着
+ * claude-sonnet-5 直连上游，404 model_not_found。
+ *
+ * 这个命令做成幂等：谁把它放进计划任务、每几分钟跑一次，断联最多持续几分钟。
+ *
+ * @param {object} flags - quiet / port
+ * @param {string} home - 家目录。
+ * @returns {Promise<number>} 退出码。
+ */
+async function cmdEnsure(flags, home) {
+  const config = loadConfig(home)
+  const paths = feibiPaths(home)
+  const quiet = flags.quiet === true
+  const say2 = (line) => { if (!quiet) say(line) }
+
+  let repaired = 0
+
+  // 1) 代理活着吗
+  const probe = await health(config.port)
+  if (probe === null) {
+    say2(`代理没在跑，拉起 :${config.port}…`)
+    const started = await cmdStart({ ...flags, quiet: true }, home)
+    if (started !== 0) {
+      process.stderr.write('拉起失败，看 ' + paths.log + '\n')
+      return started
+    }
+    repaired += 1
+    say2('  已拉起')
+  }
+
+  // 2) settings 指回来（直连模式下还要还原 key / model）
+  if (config.direct !== null && typeof config.direct === 'object') {
+    const direct = enforceDirectEnv(config, home)
+    if (direct.changed) { repaired += 1; say2('  settings 的 key/模型被抹掉了，已还原') }
+  }
+  const pointed = enforceTakeover(config, home)
+  if (pointed.changed) { repaired += 1; say2(`  settings 被改回 ${pointed.from}，已重新接管`) }
+
+  say2(repaired === 0 ? '一切正常，没动任何东西。' : `自愈完成，修了 ${repaired} 处。`)
+  return 0
+}
+
+/** 计划任务名。 */
+const WATCHDOG_TASK = 'FeibiBreakerKeepAlive'
+
+/** 装/查/卸看门狗（Windows 计划任务，每 5 分钟跑一次 ensure）。 */
+function cmdWatchdog(positional, flags, home) {
+  const action = positional[0] ?? 'status'
+  const cli = path.join(PROJECT_ROOT, 'bin', 'feibi-cc.mjs')
+
+  if (process.platform !== 'win32') {
+    process.stderr.write('看门狗目前只实现了 Windows 计划任务\n')
+    return 1
+  }
+
+  if (action === 'install') {
+    const tr = `"\${process.execPath}" "\${cli}" ensure --quiet"`
+    const args = ['/Create', '/TN', WATCHDOG_TASK, '/TR', tr, '/SC', 'MINUTE', '/MO', '5', '/F']
+    const result = spawnSync('schtasks.exe', args, { encoding: 'utf8', windowsHide: true })
+    if (result.status !== 0) {
+      process.stderr.write('装看门狗失败：' + (result.stderr || result.stdout || '').trim() + '\n')
+      return 1
+    }
+    say(`看门狗已装：每 5 分钟跑一次 feibi-cc ensure（任务名 ${WATCHDOG_TASK}）`)
+    say('立刻跑一次看效果：schtasks /Run /TN ' + WATCHDOG_TASK)
+    return 0
+  }
+
+  if (action === 'remove') {
+    const result = spawnSync('schtasks.exe', ['/Delete', '/TN', WATCHDOG_TASK, '/F'], { encoding: 'utf8', windowsHide: true })
+    say(result.status === 0 ? '看门狗已移除。' : '没有这个任务（可能本来就没装）。')
+    return 0
+  }
+
+  const query = spawnSync('schtasks.exe', ['/Query', '/TN', WATCHDOG_TASK], { encoding: 'utf8', windowsHide: true })
+  say(query.status === 0 ? query.stdout.trim() : '没装看门狗。装：feibi-cc watchdog install')
+  return 0
+}
+
 async function main() {
   const [, , command = 'status', ...rest] = process.argv
   const { flags, rest: positional } = parseArgs(rest)
@@ -789,7 +1000,11 @@ async function main() {
     case 'show': showPanel(home); return 0
     case 'set': return setConfig(positional, home)
     case 'models': return cmdModels(home)
+    case 'ensure': return cmdEnsure(flags, home)
+    case 'watchdog': return cmdWatchdog(positional, flags, home)
     case 'direct': return cmdDirect(flags, home)
+    case 'bypass': return cmdBypass(flags, home)
+    case 'resume': return cmdResume(home)
     case 'undirect': return cmdUndirect(home)
     case 'status': return cmdStatus(home)
     case 'log': return cmdLog(flags, home)
@@ -808,7 +1023,11 @@ async function main() {
       say('  show      在终端打印设置面板（状态 + 开关 + 最近判定）')
       say('  set       改配置，例：feibi-cc set strictness=max retryMax=3')
       say('  models    列出上游真实可用的模型名')
+      say('  ensure    自愈：代理没跑就拉起、settings 被改回就抢回来')
+      say('  watchdog  install|remove|status   每 5 分钟跑一次 ensure')
       say('  panel     打开网页设置面板（浏览器，本机 127.0.0.1）')
+      say('  bypass    切旁路：入口直接指上游，不经过本代理（关代理也能用）')
+      say('  resume    撤旁路：入口改回本代理')
       say('  statusline 打印状态条那一行（给 settings.json 用）')
       say('  direct    旁路中间层，直连一个确定能用的端点（--upstream --key --model）')
       say('  undirect  撤销直连，env 还原')

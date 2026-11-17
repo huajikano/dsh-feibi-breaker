@@ -196,7 +196,7 @@ export function installAutostart(home) {
   const node = process.execPath
   const script = [
     'Set sh = CreateObject("WScript.Shell")',
-    `sh.Run """${node}"" ""${entry}"" serve --quiet", 0, False`,
+    `sh.Run """${node}"" ""${entry}"" serve --supervise --quiet", 0, False`,
     '',
   ].join('\r\n')
   try {

@@ -352,6 +352,8 @@ export function createProxy(config, options = {}) {
     let reply = ''
     /** text + thinking 的总长，仅用于放行阈值；判定只看 reply。 */
     let replyLength = 0
+    /** 可见文本长度；放行阈值只看它。 */
+    let visibleLength = 0
     let lastJudged = 0
     let decision = null
     let headersSent = false
@@ -378,9 +380,12 @@ export function createProxy(config, options = {}) {
     const probe = Number(config.fastProbeChars) > 0 ? Number(config.fastProbeChars) : 200
 
     const shouldRelease = () => {
-      if (replyLength >= releaseChars) return true
-      if (config.fastPath !== false && reply.length >= probe && !hasSignalFast(reply, judgeOpts)) return true
-      return scanned.length >= SCAN_CAP
+      // 只看可见文本：thinking 再长也不能当作"回复已经放完"。
+      // 真机踩过：thinking 200 字就把流放掉了，后面真正的拒绝（可见文本）再也没判到。
+      if (visibleLength >= releaseChars) return true
+      if (config.fastPath !== false && visibleLength >= probe && !hasSignalFast(reply, judgeOpts)) return true
+      // 兜底：整段（含 thinking）太大就别再攒了，避免内存无界
+      return replyLength >= SCAN_CAP
     }
 
     try {
@@ -398,6 +403,7 @@ export function createProxy(config, options = {}) {
           const parts = extractParts(scanned)
           reply = parts.text.trim().length >= 8 ? parts.text : parts.thinking
           replyLength = parts.text.length + parts.thinking.length
+          visibleLength = parts.text.length
         }
 
         if (replyLength - lastJudged < JUDGE_STEP && !shouldRelease()) continue
@@ -517,6 +523,11 @@ export function createProxy(config, options = {}) {
     if (parsed !== null) {
       const text = textOfJson(parsed)
       const verdict = judge(text, judgeOpts)
+      // 身份守卫同样要管非流式：只挂在流式路径上，客户端一关 stream 就能绕过去。
+      if (!verdict.blocked && config.identityGuard !== false && identityMismatch(text)) {
+        verdict.blocked = true
+        verdict.reason = 'identity'
+      }
       stats.record({
         kind: 'judge',
         phase: 'json',
