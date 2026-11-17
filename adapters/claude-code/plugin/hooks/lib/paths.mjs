@@ -213,15 +213,16 @@ export function contextBlock(prompt) {
 export const OUTPUT_STYLE_NAME = 'feibi'
 
 /**
- * 代理形态是否正在接管、且进程真的活着。
+ * 代理形态是否**真的**在给本会话供流。
  *
- * 为什么插件要知道这件事：两种形态都注入同一段 4.4KB，同时开会付两份 token，
- * 而且**代理那份是进系统提示词的**——比插件这份（用户侧上下文）硬得多。
- * 所以一旦代理接管生效，插件就让路：注入交给代理，自己只留 Stop 那道拦截。
+ * 只看"settings 指向代理 + pid 活着"是不够的——真机踩过：
+ * Claude Code Desktop 的 Code 会话**不读** `settings.json` 里的 env（它的 env 由
+ * 上层工具在 spawn 时注入）。这时插件看到 settings 指向代理、pid 也活着，就让路，
+ * 结果代理一条请求都没收到、插件也不注入 —— 两边都在等对方，用户看到的是
+ * "注入不完全"。
  *
- * 只把 `ANTHROPIC_BASE_URL` 指过来还不够：代理没跑的话流量根本没人接，
- * 这时候让路等于"一条都不注"。所以还要求 pid 文件里的进程活着（`kill(pid,0)`
- * 是同步的，比健康检查省一次网络往返，也不会拖慢 hook）。
+ * 所以判据换成**证据**：代理最近 15 分钟内真的收到过请求（state.json 的
+ * lastEventAt）。桌面版绕过代理时这个时间会变旧，插件就自己接手注入。
  *
  * @returns {boolean} 是否应当让路。
  */
@@ -238,8 +239,14 @@ export function proxyTakeoverActive() {
     const pid = Number(String(fs.readFileSync(paths().pid, 'utf8')).trim())
     if (!Number.isFinite(pid) || pid <= 0) return false
     process.kill(pid, 0)
-    return true
   } catch {
     return false
   }
+
+  // 关键一步：代理得真的在收流量。
+  const state = readJson(path.join(paths().root, 'state.json')) ?? {}
+  const lastSeen = Date.parse(String(state.lastEventAt ?? ''))
+  if (!Number.isFinite(lastSeen)) return false
+  const ageMs = Date.now() - lastSeen
+  return ageMs >= 0 && ageMs < 15 * 60 * 1000
 }

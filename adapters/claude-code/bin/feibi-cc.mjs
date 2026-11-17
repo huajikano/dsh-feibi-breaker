@@ -411,6 +411,27 @@ function cmdPlugin(positional, flags, home) {
 // ---------------------------------------------------------------------------
 
 /**
+ * 在桌面放一个 .url 快捷方式。
+ *
+ * "不知道该在哪里打开"是纯粹的入口问题：面板是个网址，而网址需要一个
+ * 能双击的东西。放一个 Internet Shortcut 比教人记端口可靠。
+ *
+ * @param {number} port - 代理端口。
+ * @returns {string|null} 快捷方式路径。
+ */
+function writePanelShortcut(port) {
+  try {
+    const desktop = path.join(process.env.USERPROFILE ?? '', 'Desktop')
+    if (!fs.existsSync(desktop)) return null
+    const file = path.join(desktop, '菲比破限面板.url')
+    fs.writeFileSync(file, `[InternetShortcut]\r\nURL=http://127.0.0.1:${port}/feibi/panel\r\nIconIndex=0\r\n`, 'utf8')
+    return file
+  } catch {
+    return null
+  }
+}
+
+/**
  * 打开设置面板。
  *
  * 代理没跑就先起（面板是它的路由）。起不来就把原因说清楚，别让人对着空白页猜。
@@ -424,12 +445,16 @@ async function cmdPanel(flags, home) {
     if (started !== 0) return started
   }
   const url = `http://127.0.0.1:${port}/feibi/panel`
-  say(`设置面板：${url}`)
+  say('设置面板地址（复制到浏览器，或在桌面双击「菲比破限面板」）：')
+  say(`  ${url}`)
+  const shortcut = writePanelShortcut(port)
+  if (shortcut !== null) say(`已放桌面快捷方式：${shortcut}`)
   if (flags.open !== false) {
     try {
       spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      say('已经帮你打开浏览器；没弹出来就用上面的地址。')
     } catch {
-      say('打不开浏览器，手动复制上面的地址。')
+      say('浏览器没打开，手动复制上面的地址。')
     }
   }
   const sl = installStatusLine(home)

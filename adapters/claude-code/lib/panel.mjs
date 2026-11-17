@@ -76,12 +76,20 @@ export function panelState({ home, config }) {
   const view = {}
   for (const key of VIEWABLE) view[key] = config[key]
 
+  // 接管成立 ≠ 真的有流量。桌面版会绕过 settings.json 的 env，这时候面板如果还
+  // 只显示"已接管"，用户就会以为调了半天其实没接上——所以这里把"最近有没有请求"
+  // 单独算出来给前端。
+  const lastSeen = Date.parse(String(proxyStats.lastEventAt ?? ''))
+  const live = Number.isFinite(lastSeen) && Date.now() - lastSeen < 15 * 60 * 1000
+
   return {
     mode: {
       port: config.port,
       upstream: config.upstream,
       baseUrl,
       takeover: typeof baseUrl === 'string' && baseUrl.includes(`127.0.0.1:${config.port}`),
+      live,
+      lastSeen: proxyStats.lastEventAt ?? null,
       model: settings?.env?.ANTHROPIC_MODEL ?? settings?.env?.ANTHROPIC_DEFAULT_SONNET_MODEL ?? null,
       proxy: proxyStats,
     },
@@ -384,8 +392,15 @@ function render(){
   const mode = s.mode;
   $('mode-line').textContent = 'v1.0.3 · ' + (mode.takeover ? '已接管 ' : '未接管 ') + '127.0.0.1:' + mode.port;
   $('mode').innerHTML =
+    (mode.takeover && !mode.live
+      ? '<div style="border:1px solid rgba(248,81,73,.45);background:rgba(248,81,73,.08);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px">'
+        + '<b style="color:var(--bad)">代理没收到流量</b><br>settings 的 baseURL 指向本代理，但最近 15 分钟没有请求进来。'
+        + '桌面版会绕过 settings.json 的 env，此时只有插件（上下文注入）在起作用。'
+        + '<br>要让面板里的开关真的生效，得把桌面版的上游指到 <code>http://127.0.0.1:' + mode.port + '</code>。</div>'
+      : '') +
     '<div class="kv"><span>入口</span><span>' + (mode.baseUrl || '未设置') + '</span></div>' +
     '<div class="kv"><span>接管</span>' + badge(mode.takeover, '已接管', '没接管') + '</div>' +
+    '<div class="kv"><span>流量</span>' + badge(mode.live, '最近有请求', '最近没有请求') + '</div>' +
     '<div class="kv"><span>上游</span><span>' + mode.upstream + '</span></div>' +
     '<div class="kv"><span>模型</span><span>' + (mode.model || '-') + '</span></div>' +
     '<div class="kv"><span>提示词</span><span>' + ({custom:'你自己那份', default:'内置默认', empty:'空（不会注入！）'}[s.prompt.source] || s.prompt.source) + ' · ' + s.prompt.chars + ' 字</span></div>';

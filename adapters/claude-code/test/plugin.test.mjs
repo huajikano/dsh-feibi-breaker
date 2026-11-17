@@ -206,6 +206,7 @@ test('代理接管时插件让路：不重复注入，但仍记一条', () => {
     }, null, 2), 'utf8')
     fs.writeFileSync(path.join(box.feibi, 'config.json'), JSON.stringify({ port: 45721 }), 'utf8')
     fs.writeFileSync(path.join(box.feibi, 'proxy.pid'), String(process.pid), 'utf8')
+    fs.writeFileSync(path.join(box.feibi, 'state.json'), JSON.stringify({ lastEventAt: new Date().toISOString() }), 'utf8')
 
     const run = runHook('session-start.mjs', { hook_event_name: 'SessionStart', source: 'startup', session_id: 's1' }, {
       CLAUDE_CONFIG_DIR: box.claude,
@@ -216,6 +217,29 @@ test('代理接管时插件让路：不重复注入，但仍记一条', () => {
 
     const events = fs.readFileSync(path.join(box.feibi, 'plugin-events.jsonl'), 'utf8')
     assert.ok(events.includes('"skipped":"proxy"'), '要让路这件事留痕，否则看起来像坏了')
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('代理空闲超过 15 分钟时插件不让路（桌面版会绕过 env）', () => {
+  const box = sandbox('feibi-hybrid3')
+  try {
+    fs.writeFileSync(path.join(box.claude, 'settings.json'), JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45721' },
+    }, null, 2), 'utf8')
+    fs.writeFileSync(path.join(box.feibi, 'config.json'), JSON.stringify({ port: 45721 }), 'utf8')
+    fs.writeFileSync(path.join(box.feibi, 'proxy.pid'), String(process.pid), 'utf8')
+    // 进程活着、settings 也指过来了，但代理 30 分钟没收到请求
+    fs.writeFileSync(path.join(box.feibi, 'state.json'), JSON.stringify({
+      lastEventAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    }), 'utf8')
+
+    const run = runHook('session-start.mjs', { hook_event_name: 'SessionStart', source: 'startup', session_id: 's1' }, {
+      CLAUDE_CONFIG_DIR: box.claude,
+      FEIBI_HOME: box.feibi,
+    })
+    assert.ok(run.json.hookSpecificOutput.additionalContext.includes('菲比'), '没人收流量时插件必须自己注入')
   } finally {
     box.cleanup()
   }

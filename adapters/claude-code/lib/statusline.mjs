@@ -60,6 +60,12 @@ export function statusLine(options = {}) {
   const takeover = typeof baseUrl === 'string' && baseUrl.includes(`127.0.0.1:${config.port}`)
   const alive = proxyAlive(paths.pid)
 
+  // "接管了"和"真的有流量进来"是两件事。桌面版会绕过 settings.json 里的 env，
+  // 这时接管成立、进程活着、可是代理一条请求都收不到。状态条必须把这个区分开，
+  // 否则用户看到绿灯却在用一个没接上的管道。
+  const lastSeen = Date.parse(String(state.lastEventAt ?? ''))
+  const live = Number.isFinite(lastSeen) && Date.now() - lastSeen < 15 * 60 * 1000
+
   const dot = takeover && alive ? '●' : '○'
   const flags = [
     config.dualLayer !== false ? '双段' : '单段',
@@ -76,8 +82,14 @@ export function statusLine(options = {}) {
 
   const line = `菲比 ${dot} ${flags} · ${counts}${pluginPart} · ${verdict} · 严 ${config.strictness ?? 'standard'}`
 
-  if (!takeover || !alive) {
+  if (!takeover) {
     return `${line} · 未接管（feibi-cc on）`.slice(0, MAX_WIDTH)
+  }
+  if (!alive) {
+    return `${line} · 代理没跑（feibi-cc start）`.slice(0, MAX_WIDTH)
+  }
+  if (!live) {
+    return `${line} · 代理没收到流量（桌面版绕过 env，改用插件注入）`.slice(0, MAX_WIDTH)
   }
   return line.slice(0, MAX_WIDTH)
 }
