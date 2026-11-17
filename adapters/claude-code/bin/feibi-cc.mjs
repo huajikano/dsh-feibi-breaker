@@ -453,8 +453,11 @@ async function cmdPanel(flags, home) {
   const url = `http://127.0.0.1:${port}/feibi/panel`
   say('设置面板地址（复制到浏览器，或在桌面双击「菲比破限面板」）：')
   say(`  ${url}`)
-  const shortcut = writePanelShortcut(port)
-  if (shortcut !== null) say(`已放桌面快捷方式：${shortcut}`)
+  // 桌面快捷方式改成显式要才建：默认往桌面上丢东西是打扰。
+  if (flags.shortcut === true) {
+    const shortcut = writePanelShortcut(port)
+    if (shortcut !== null) say(`已放桌面快捷方式：${shortcut}`)
+  }
   if (flags.open !== false && flags['no-open'] !== true) {
     try {
       spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
