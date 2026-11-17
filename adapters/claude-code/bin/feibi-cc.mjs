@@ -24,9 +24,10 @@ import { fileURLToPath } from 'node:url'
 import { feibiPaths, loadConfig, saveConfig, loadState, readJson } from '../lib/config.mjs'
 import { createProxy } from '../lib/proxy.mjs'
 import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/prompt-store.mjs'
-import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, enforceDirectEnv, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
+import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, enforceDirectEnv, installStatusLine, removeStatusLine, removeAutostart, PROJECT_ROOT } from '../lib/install.mjs'
 import { statusLine } from '../lib/statusline.mjs'
 import { showPanel, setConfig } from '../lib/panel-cli.mjs'
+import { releaseSettings } from '../lib/release.mjs'
 import { listUpstreamModels, applyConfigPatch } from '../lib/panel.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
 import { enableDirect, disableDirect, enableBypass, disableBypass } from '../lib/direct.mjs'
@@ -1123,6 +1124,44 @@ async function cmdDoctor(flags, home) {
   return 1
 }
 
+
+/**
+ * 交还控制权：停代理、去自启、把 settings.json 还给别的工具（CC Switch 之类）。
+ *
+ * 关插件 ≠ 关代理。插件是 hook，不启用就不跑；代理是开机自启的独立进程，
+ * 还每 3 秒把 settings.json 的 ANTHROPIC_BASE_URL 抢回自己。用户切供应商后看到
+ * "两边地址不一样"，就是它在抢。
+ *
+ * @param {object} flags - target / keepRunning
+ * @param {string} home - 家目录。
+ * @returns {Promise<number>} 退出码
+ */
+async function cmdRelease(flags, home) {
+  const target = typeof flags.target === 'string' ? flags.target : undefined
+
+  if (flags.keepRunning !== true) {
+    const stopped = await cmdStop(home)
+    if (stopped !== 0) process.stderr.write('停代理时有问题，继续交还 env。\n')
+  }
+
+  const removedAuto = removeAutostart(home)
+  say(removedAuto.ok ? '开机自启已移除。' : '开机自启移除失败（可能本来就没有）。')
+
+  const result = releaseSettings({ home, targetBaseUrl: target })
+  if (!result.ok) {
+    process.stderr.write(`交还失败：${result.error}\n`)
+    return 1
+  }
+
+  say(`settings.json 已交还：ANTHROPIC_BASE_URL = ${result.baseUrl}`)
+  if (result.removed.length > 0) say(`  清掉了我们写进去的键：${result.removed.join(', ')}`)
+  say('  巡检已关闭（watchSettings=false），以后不会再改这个文件。')
+  say('')
+  say('接下来：去 CC Switch 点一次「切换/应用」，让它把自己的完整配置写进去。')
+  say('想重新接管：feibi-cc resume 之后 feibi-cc start')
+  return 0
+}
+
 async function main() {
   const [, , command = 'status', ...rest] = process.argv
   const { flags, rest: positional } = parseArgs(rest)
@@ -1144,6 +1183,7 @@ async function main() {
     case 'models': return cmdModels(home)
     case 'ensure': return cmdEnsure(flags, home)
     case 'doctor': return cmdDoctor(flags, home)
+    case 'release': return cmdRelease(flags, home)
     case 'watchdog': return cmdWatchdog(positional, flags, home)
     case 'direct': return cmdDirect(flags, home)
     case 'bypass': return cmdBypass(flags, home)
@@ -1168,6 +1208,7 @@ async function main() {
       say('  models    列出上游真实可用的模型名')
       say('  ensure    自愈：代理没跑就拉起、settings 被改回就抢回来')
       say('  doctor    体检（--fix 顺手修）；给 Claude 自己排查用')
+      say('  release   交还控制权：停代理、去自启、把 settings.json 还给 CC Switch')
       say('  watchdog  install|remove|status   每 5 分钟跑一次 ensure')
       say('  panel     打开网页设置面板（浏览器，本机 127.0.0.1）')
       say('  bypass    切旁路：入口直接指上游，不经过本代理（关代理也能用）')

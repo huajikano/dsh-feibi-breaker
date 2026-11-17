@@ -316,6 +316,8 @@ export function install(options = {}) {
     }
   }
 
+  // 重新接管时把巡检开回来（release 会把它关掉）
+  config.watchSettings = true
   config.installedAt = config.installedAt ?? new Date().toISOString()
   const pointed = pointSettingsAtProxy(config, home)
   if (!pointed.ok) return { ok: false, error: pointed.error, home: paths.root }
@@ -384,6 +386,7 @@ export function toggle(on, options = {}) {
   const home = options.home
   const config = loadConfig(home)
   if (on) {
+    config.watchSettings = true
     const pointed = pointSettingsAtProxy(config, home)
     saveConfig(config, home)
     return { ok: pointed.ok, baseUrl: pointed.baseUrl, error: pointed.error }
