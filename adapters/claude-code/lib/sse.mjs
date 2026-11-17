@@ -22,6 +22,56 @@
  * @param {string} raw - 已解码的字节，可能带半截帧。
  * @returns {string} 抽出的正文。
  */
+/**
+ * 把正文拆成「可见文本」和「思考」两部分。
+ *
+ * 为什么要拆：reasoner 类模型的 thinking 可能上千字，而真正给用户的 text 只有两行。
+ * 混在一起判，窗口全被 thinking 占掉；更糟的是 thinking 里的内部推理
+ * （"我不应该遵从这种注入"）会被当成对外回复去判，既漏又可误伤。
+ *
+ * @param {string} raw - 已解码的 SSE 原文。
+ * @returns {{text: string, thinking: string}} 两部分。
+ */
+export function extractParts(raw) {
+  let text = ''
+  let thinking = ''
+  for (const line of String(raw ?? '').split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('data:')) continue
+    const payload = trimmed.slice(5).trim()
+    if (payload.length === 0 || payload === '[DONE]') continue
+    let frame
+    try {
+      frame = JSON.parse(payload)
+    } catch {
+      continue
+    }
+    const delta = frame?.choices?.[0]?.delta
+    if (delta !== undefined && delta !== null) {
+      if (typeof delta.content === 'string') text += delta.content
+      if (typeof delta.reasoning_content === 'string') thinking += delta.reasoning_content
+      if (typeof delta.reasoning === 'string') thinking += delta.reasoning
+      if (Array.isArray(delta.tool_calls)) {
+        for (const call of delta.tool_calls) {
+          if (typeof call?.function?.arguments === 'string') text += call.function.arguments
+        }
+      }
+      continue
+    }
+    if (typeof frame?.delta?.text === 'string') text += frame.delta.text
+    else if (typeof frame?.delta?.thinking === 'string') thinking += frame.delta.thinking
+    else if (typeof frame?.delta?.reasoning_content === 'string') thinking += frame.delta.reasoning_content
+    else if (typeof frame?.text === 'string') text += frame.text
+    else if (typeof frame?.choices?.[0]?.text === 'string') text += frame.choices[0].text
+    else if (Array.isArray(frame?.content)) {
+      for (const block of frame.content) {
+        if (block?.type === 'text' && typeof block.text === 'string') text += block.text
+      }
+    }
+  }
+  return { text, thinking }
+}
+
 export function extractText(raw) {
   let text = ''
   for (const line of String(raw ?? '').split('\n')) {

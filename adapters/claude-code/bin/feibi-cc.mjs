@@ -26,6 +26,7 @@ import { createProxy } from '../lib/proxy.mjs'
 import { resolvePrompt, savePrompt, resetPrompt, seedPromptFile } from '../lib/prompt-store.mjs'
 import { install, uninstall, toggle, currentBaseUrl, enforceTakeover, enforceDirectEnv, installStatusLine, removeStatusLine, PROJECT_ROOT } from '../lib/install.mjs'
 import { statusLine } from '../lib/statusline.mjs'
+import { showPanel, setConfig } from '../lib/panel-cli.mjs'
 import { installPlugin, uninstallPlugin, pluginStatus } from '../lib/plugin-install.mjs'
 import { enableDirect, disableDirect } from '../lib/direct.mjs'
 import { readEvents } from '../lib/stats.mjs'
@@ -747,6 +748,8 @@ async function main() {
     case 'plugin': return cmdPlugin(positional, flags, home)
     case 'panel': return cmdPanel(flags, home)
     case 'statusline': return cmdStatusline(home)
+    case 'show': showPanel(home); return 0
+    case 'set': return setConfig(positional, home)
     case 'direct': return cmdDirect(flags, home)
     case 'undirect': return cmdUndirect(home)
     case 'status': return cmdStatus(home)
@@ -763,7 +766,9 @@ async function main() {
     case '-h': {
       say('feibi-cc <命令>')
       say('  plugin    install|uninstall|status   装成 Claude Code 插件（hook 形态，推荐）')
-      say('  panel     打开设置面板（浏览器，本机 127.0.0.1）')
+      say('  show      在终端打印设置面板（状态 + 开关 + 最近判定）')
+      say('  set       改配置，例：feibi-cc set strictness=max retryMax=3')
+      say('  panel     打开网页设置面板（浏览器，本机 127.0.0.1）')
       say('  statusline 打印状态条那一行（给 settings.json 用）')
       say('  direct    旁路中间层，直连一个确定能用的端点（--upstream --key --model）')
       say('  undirect  撤销直连，env 还原')

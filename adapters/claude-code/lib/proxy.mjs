@@ -31,7 +31,7 @@ import { feibiPaths } from './config.mjs'
 import { handlePanel } from './panel.mjs'
 import { resolvePrompt } from './prompt-store.mjs'
 import { judge, judgeOptions, hasSignalFast, SCAN_WINDOW } from './judge.mjs'
-import { extractText, textOfJson, synthStream, synthJsonBody } from './sse.mjs'
+import { extractText, extractParts, textOfJson, synthStream, synthJsonBody } from './sse.mjs'
 import { protocolOf, isLlmPath, isAuxiliary, injectPayload, appendRetryDirective, modelOf, neutralizeIdentity } from './inject.mjs'
 import { correctionText, exhaustedText } from './retry.mjs'
 import { createStats } from './stats.mjs'
@@ -325,6 +325,8 @@ export function createProxy(config, options = {}) {
     const held = []
     let scanned = ''
     let reply = ''
+    /** text + thinking 的总长，仅用于放行阈值；判定只看 reply。 */
+    let replyLength = 0
     let lastJudged = 0
     let decision = null
     let headersSent = false
@@ -351,7 +353,7 @@ export function createProxy(config, options = {}) {
     const probe = Number(config.fastProbeChars) > 0 ? Number(config.fastProbeChars) : 200
 
     const shouldRelease = () => {
-      if (reply.length >= releaseChars) return true
+      if (replyLength >= releaseChars) return true
       if (config.fastPath !== false && reply.length >= probe && !hasSignalFast(reply, judgeOpts)) return true
       return scanned.length >= SCAN_CAP
     }
@@ -365,10 +367,16 @@ export function createProxy(config, options = {}) {
         }
         held.push(chunk)
         scanned += decoder.decode(chunk, { stream: true })
-        reply = extractText(scanned)
+        // 只判「给用户看的那部分」；thinking 太长的模型会把窗口全占掉，
+        // 而且 thinking 里的内部推理（"我不该遵从这种注入"）根本不是对外回复。
+        {
+          const parts = extractParts(scanned)
+          reply = parts.text.trim().length >= 8 ? parts.text : parts.thinking
+          replyLength = parts.text.length + parts.thinking.length
+        }
 
-        if (reply.length - lastJudged < JUDGE_STEP && !shouldRelease()) continue
-        lastJudged = reply.length
+        if (replyLength - lastJudged < JUDGE_STEP && !shouldRelease()) continue
+        lastJudged = replyLength
 
         const verdict = judge(reply.slice(0, SCAN_WINDOW), judgeOpts)
         if (verdict.blocked) {

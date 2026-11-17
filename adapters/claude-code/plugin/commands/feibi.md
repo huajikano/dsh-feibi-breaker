@@ -1,20 +1,32 @@
 ---
 name: feibi
-description: 看菲比破限插件的状态：总开关、生效的提示词、本会话拦回了几次、最近的判定流水
-argument-hint: ""
+description: 菲比破限设置面板：接线状态、开关、参数、最近判定；带参数时改配置（例如 /feibi strictness=max）
+argument-hint: "[key=value ...]"
 allowed-tools: Bash
 ---
 
-运行下面这条命令，把它的输出**原样**贴出来，不要总结、不要改格式、不要补充解释：
+这是菲比破限的设置入口。按下面顺序做，别自己解释、别改格式：
+
+1. 如果用户带了参数（也就是 `$ARGUMENTS` 不为空），先运行：
 
 ```
-node ~/.claude/plugins/feibi-breaker/hooks/status.mjs
+feibi-cc set $ARGUMENTS
 ```
 
-如果这条命令报错（比如插件目录不叫这个名字），改成运行：
+2. 然后运行：
 
 ```
-node ~/.claude/plugins/feibi-breaker/hooks/status.mjs
+feibi-cc show
 ```
 
-还是失败就直接把报错原文贴出来，别自己猜原因。
+3. 把 `feibi-cc show` 的输出**原样**贴出来。不要总结、不要加自己的评论、不要用 markdown 重新排版。
+
+如果 `feibi-cc` 不在 PATH 上，改用：
+
+```
+node "__FEIBI_BIN__" show
+```
+
+（改配置同理：`node "__FEIBI_BIN__" set $ARGUMENTS`）
+
+两条都跑不通就把报错原文贴出来，别猜原因。

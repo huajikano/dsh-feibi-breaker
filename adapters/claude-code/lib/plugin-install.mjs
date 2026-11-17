@@ -20,22 +20,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { defaultPayloadText } from './core-text.mjs'
 
-/** 适配层根（marketplace 就在这儿）。 */
+/** 项目根（marketplace 就在这儿）。 */
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-
-/**
- * 上层仓库根。
- *
- * 本适配层以 `adapters/claude-code/` 的形式住在 dsh-feibi-breaker 仓库里，
- * 打包资产 `core/payload.bin` 和解码器 `lib/core.{js,keyring.js}` 都在仓库根，
- * 不在适配层目录下。所以这里往上找两级；拿不到就退回适配层自己（独立分发时）。
- */
-const REPO_ROOT = (() => {
-  const maybe = path.dirname(path.dirname(PROJECT_ROOT))
-  return fs.existsSync(path.join(maybe, 'core', 'payload.bin')) ? maybe : PROJECT_ROOT
-})()
 
 /** 插件名 / 市场名。市场名和插件名一样，所以启用键是 `feibi-breaker@feibi-breaker`。 */
 export const PLUGIN_NAME = 'feibi-breaker'
@@ -132,30 +119,22 @@ export function installPlugin(options = {}) {
     return { ok: false, error: `拷贝插件失败：${error instanceof Error ? error.message : String(error)}` }
   }
 
-  // 1b. 把打包资产搬进插件目录（vendored）。
+  // 1c. 把 /feibi 命令里的兜底路径换成真实路径。
   //
-  // 为什么不在仓库里放明文规则：上游把 payload 封成了 `core/payload.bin`，
-  // 设计上就是"规则不落成可读文本"。适配层照办——插件里只放解码器副本和那个
-  // 二进制资产，运行时现解。**必须搬**，因为装完之后的插件目录在
-  // `~/.claude/plugins/feibi-breaker/`，它看不到仓库根下的 `core/`。
-  let vendored = 0
+  // 命令正文里那句 `node "__FEIBI_BIN__" show` 是给"feibi-cc 不在 PATH 上"准备的
+  // 兜底；插件被拷到 ~/.claude/plugins 之后，源目录的绝对路径只有安装器知道，
+  // 所以在拷贝时替换掉占位符，而不是让用户自己填。
   try {
-    const coreSource = path.join(REPO_ROOT, 'core')
-    const libSource = path.join(REPO_ROOT, 'lib')
-    const vendorRoot = path.join(paths.install, 'vendor')
-    fs.mkdirSync(path.join(vendorRoot, 'core'), { recursive: true })
-    fs.mkdirSync(path.join(vendorRoot, 'lib'), { recursive: true })
-    for (const [from, to] of [
-      [path.join(coreSource, 'payload.bin'), path.join(vendorRoot, 'core', 'payload.bin')],
-      [path.join(libSource, 'core.js'), path.join(vendorRoot, 'lib', 'core.js')],
-      [path.join(libSource, 'keyring.js'), path.join(vendorRoot, 'lib', 'keyring.js')],
-    ]) {
-      if (!fs.existsSync(from)) continue
-      fs.copyFileSync(from, to)
-      vendored += 1
+    const commandFile = path.join(paths.install, 'commands', 'feibi.md')
+    const binFile = path.join(PROJECT_ROOT, 'bin', 'feibi-cc.mjs')
+    if (fs.existsSync(commandFile)) {
+      const text = fs.readFileSync(commandFile, 'utf8')
+      if (text.includes('__FEIBI_BIN__')) {
+        fs.writeFileSync(commandFile, text.split('__FEIBI_BIN__').join(binFile.split('\\').join('\\\\')), 'utf8')
+      }
     }
   } catch {
-    // 搬不动也不致命：prompt.md 那句回退还在，只是内置规则读不到。
+    // 替换失败只是兜底路径不对，主路径 feibi-cc 还在。
   }
 
   // 2. 市场登记
@@ -219,22 +198,14 @@ export function installPlugin(options = {}) {
 
   writeJson(paths.settings, settings)
 
-  // 5. 把提示词种成用户可编辑的那份（和代理形态共用同一个文件）
-  //
-  // 种子内容来自打包资产，不是仓库里的明文——上游的设计就是"规则只以
-  // 打包形式随包发布"。用户机器上那份明文是**他自己**的副本，改它只影响自己。
+  // 5. 把提示词种成用户可编辑的那份（和代理版共用同一个文件）
   let seeded = 'kept'
   try {
     fs.mkdirSync(paths.feibiHome, { recursive: true })
     const target = path.join(paths.feibiHome, 'prompt.md')
     if (!fs.existsSync(target)) {
-      const text = defaultPayloadText()
-      if (text.length > 0) {
-        fs.writeFileSync(target, text, 'utf8')
-        seeded = 'created'
-      } else {
-        seeded = 'no-payload'
-      }
+      fs.copyFileSync(path.join(source, 'prompts', 'feibi.md'), target)
+      seeded = 'created'
     }
   } catch {
     seeded = 'failed'

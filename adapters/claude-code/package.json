@@ -1,6 +1,6 @@
 {
   "name": "feibi-breaker-claude-code",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "type": "module",
   "description": "菲比破限 for Claude Code：hook 形态的官方插件（注入 + 收尾拦截），另附可选的本地代理形态（系统提示词级注入 + 流级拦截）。",
