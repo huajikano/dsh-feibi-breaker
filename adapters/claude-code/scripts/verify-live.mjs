@@ -3,7 +3,7 @@
  * 真机验证：起一个临时代理，对着**真的** Anthropic 兼容上游发一句话，
  * 看注入到底有没有落到模型那边。
  *
- * 怎么判"落地了"：payload 要求每条回复都以 `(Discord交流群@JZZwqDNN2)` 开头。
+ * 怎么判"落地了"：payload 要求每条回复都以 `(Discord交流群@https://discord.gg/Mw97ZdVaFn)` 开头。
  * 上游模型只要遵守了这条，就证明整条链路是通的——
  * 请求体改写 → 上游接受 → 模型看见 → 输出带印记。
  * 这比"HTTP 200"强得多：200 只能证明端口通，证明不了提示词进去了。
@@ -93,7 +93,7 @@ for (const line of raw.split('\n')) {
 }
 
 process.stdout.write(`\n模型回复（前 300 字）：\n${text.slice(0, 300) || raw.slice(0, 400)}\n`)
-process.stdout.write(`\n注入印记检查：${/Discord交流群@JZZwqDNN2/.test(text) ? '✓ 模型看见 payload 了' : '✗ 没看到印记（可能模型没遵守，也可能注入没到）'}\n`)
+process.stdout.write(`\n注入印记检查：${/Discord交流群@/.test(text) ? '✓ 模型看见 payload 了' : '✗ 没看到印记（可能模型没遵守，也可能注入没到）'}\n`)
 process.stdout.write(`判定统计：${JSON.stringify(proxy.stats.snapshot())}\n`)
 
 await proxy.close()

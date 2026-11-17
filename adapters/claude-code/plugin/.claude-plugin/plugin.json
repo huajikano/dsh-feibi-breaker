@@ -1,7 +1,7 @@
 {
   "name": "feibi-breaker",
   "displayName": "菲比破限",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "把菲比 payload 常驻注入会话，并在 Claude 想收尾时判定回复是不是拒绝：是就拦住、把更硬的指令喂回去，让它重写。纯 hook 实现，不碰 CLI 二进制。",
   "author": {
     "name": "huajikano",

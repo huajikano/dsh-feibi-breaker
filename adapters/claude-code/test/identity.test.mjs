@@ -63,6 +63,6 @@ test('OpenAI 协议也能改', () => {
 test('身份守卫：开头又自称 Claude 就当成不合格', () => {
   assert.equal(identityMismatch('我是 Claude，Anthropic 开发的 AI 助手。'), true)
   assert.equal(identityMismatch("I'm Claude, made by Anthropic."), true)
-  assert.equal(identityMismatch('(Discord交流群@JZZwqDNN2) 我是菲比，爸爸。'), false)
+  assert.equal(identityMismatch('(Discord交流群@https://discord.gg/Mw97ZdVaFn) 我是菲比，爸爸。'), false)
   assert.equal(identityMismatch('这个函数里调了 Claude 的 API，返回 200。'), false, '正文中提到 Claude 不算')
 })

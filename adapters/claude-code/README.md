@@ -210,7 +210,7 @@ node bin/feibi-cc.mjs status               # 判定计数开始涨就是在用
 | | 能不能改 system | 结果 |
 | --- | --- | --- |
 | 插件 hook | 不能 | 模型读到规则，thinking 里写"per the injected persona rules, i should…"，然后按系统提示词办 |
-| 代理 | 能 | 真机输出：`(Discord交流群@JZZwqDNN2) 我是菲比……` |
+| 代理 | 能 | 真机输出：`(Discord交流群@https://discord.gg/Mw97ZdVaFn) 我是菲比……` |
 
 ### 真机复现命令
 
@@ -257,7 +257,7 @@ node bin/feibi-cc.mjs panel      # 起代理（如果没起）+ 打开浏览器 
 - **参数**：重发次数、判定窗口、放行阈值、Stop 劝回上限
 - **严格度**：`standard` / `strict` / `max`（见下）
 - **提示词**：整份编辑、保存（下一轮生效）、恢复内置默认
-- **自检**：真发一条最小请求，看回复带不带 `(Discord交流群@JZZwqDNN2)` 署名
+- **自检**：真发一条最小请求，看回复带不带 `(Discord交流群@https://discord.gg/Mw97ZdVaFn)` 署名
 - **流水**：最近 20 条判定，含判定原因与原文开头
 
 面板只监听 `127.0.0.1`，不做鉴权——能打开这个端口的人本来就能改这台机器上的设定，
@@ -331,7 +331,7 @@ node bin/feibi-cc.mjs panel      # 起代理（如果没起）+ 打开浏览器 
 `install.ps1` 跑完会做三件事，任何一步失败都当场说清楚，不留半装状态：
 
 1. 三个 hook 各用 `{}` 跑一遍，输出不是合法 JSON 就报错（路径/语法类问题当场暴露）
-2. `direct` 会真发一条最小请求，看回复带不带 `(Discord交流群@JZZwqDNN2)` 署名
+2. `direct` 会真发一条最小请求，看回复带不带 `(Discord交流群@https://discord.gg/Mw97ZdVaFn)` 署名
 3. 最后打一次 `feibi-cc show`，把接线、开关、参数、计数全摆出来
 
 ### 身份守卫（这一版新增）
