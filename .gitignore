@@ -17,3 +17,5 @@ prompts/
 tools/.core-source.json
 tools/pack-core.mjs
 audit*.jsonl
+
+adapters/claude-code/dist/

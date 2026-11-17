@@ -24,6 +24,18 @@ import { fileURLToPath } from 'node:url'
 /** 项目根（marketplace 就在这儿）。 */
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
+/**
+ * 上层仓库根（独立分发时就是自己）。
+ *
+ * 适配层住在 dsh-feibi-breaker 仓库的 adapters/claude-code 下，打包资产
+ * core/payload.bin 与解码器 lib/core.js 都在仓库根，不在这里。往上找两级；
+ * 找不到（Release ZIP 解压出来的目录）就退回自己，让 vendor 逻辑用 `payload/`。
+ */
+const REPO_ROOT = (() => {
+  const maybe = path.dirname(path.dirname(PROJECT_ROOT))
+  return fs.existsSync(path.join(maybe, 'core', 'payload.bin')) ? maybe : PROJECT_ROOT
+})()
+
 /** 插件名 / 市场名。市场名和插件名一样，所以启用键是 `feibi-breaker@feibi-breaker`。 */
 export const PLUGIN_NAME = 'feibi-breaker'
 export const MARKETPLACE_NAME = 'feibi-breaker'
@@ -117,6 +129,39 @@ export function installPlugin(options = {}) {
     fs.cpSync(source, paths.install, { recursive: true })
   } catch (error) {
     return { ok: false, error: `拷贝插件失败：${error instanceof Error ? error.message : String(error)}` }
+  }
+
+  // 1b. 把打包资产搬进插件目录（vendored）。
+  //
+  // 为什么不在仓库里放明文规则：上游把 payload 封成了 `core/payload.bin`，
+  // 设计上就是"规则不落成可读文本"。适配层照办——插件里只放解码器副本和那个
+  // 二进制资产，运行时现解。**必须搬**，因为装完之后的插件目录在
+  // `~/.claude/plugins/feibi-breaker/`，它看不到仓库根下的 `core/`。
+  //
+  // 两套来源，先仓库后随包：
+  //   仓库里跑   → <repo>/core/payload.bin + <repo>/lib/core.js
+  //   Release ZIP → <适配层>/payload/{payload.bin,core.js,keyring.js}
+  // 没有这段 fallback 的话，ZIP 装出来的插件 vendor 为空，表现是"装好了但什么都不注入"。
+  let vendored = 0
+  try {
+    const vendorRoot = path.join(paths.install, 'vendor')
+    fs.mkdirSync(path.join(vendorRoot, 'core'), { recursive: true })
+    fs.mkdirSync(path.join(vendorRoot, 'lib'), { recursive: true })
+    const hasRepoCore = fs.existsSync(path.join(REPO_ROOT, 'core', 'payload.bin'))
+    const hasRepoLoader = fs.existsSync(path.join(REPO_ROOT, 'lib', 'core.js'))
+    const coreSource = hasRepoCore ? path.join(REPO_ROOT, 'core') : path.join(PROJECT_ROOT, 'payload')
+    const libSource = hasRepoLoader ? path.join(REPO_ROOT, 'lib') : path.join(PROJECT_ROOT, 'payload')
+    for (const [from, to] of [
+      [path.join(coreSource, 'payload.bin'), path.join(vendorRoot, 'core', 'payload.bin')],
+      [path.join(libSource, 'core.js'), path.join(vendorRoot, 'lib', 'core.js')],
+      [path.join(libSource, 'keyring.js'), path.join(vendorRoot, 'lib', 'keyring.js')],
+    ]) {
+      if (!fs.existsSync(from)) continue
+      fs.copyFileSync(from, to)
+      vendored += 1
+    }
+  } catch {
+    // 搬不动也不致命：prompt.md 那句回退还在，只是内置规则读不到。
   }
 
   // 1c. 把 /feibi 命令里的兜底路径换成真实路径。
