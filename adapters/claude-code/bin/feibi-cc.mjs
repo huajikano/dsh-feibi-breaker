@@ -292,9 +292,20 @@ async function cmdStart(flags, home) {
     const up = await health(config.port)
     if (up !== null) {
       say(`代理已后台启动：http://127.0.0.1:${config.port}（pid ${up.pid}）`)
-      // 之前切过旁路的话，把入口收回代理，否则流量会一直绕过它。
-      const back = disableBypass(home)
-      if (back.ok && back.baseUrl) say(`  入口已指回代理：${back.baseUrl}`)
+      /**
+       * 只有在"接管模式"下才把入口收回代理。
+       *
+       * release 之后 watchSettings=false，意味着用户已经把 settings.json 交给
+       * 别的工具（CC Switch 等）。这时候 start 只应该"把面板/转发开起来"，
+       * 绝不能顺手把 ANTHROPIC_BASE_URL 抢回来——那正是用户抱怨
+       * "两边地址不一样"的根源。
+       */
+      if (config.watchSettings !== false || flags.takeover === true) {
+        const back = disableBypass(home)
+        if (back.ok && back.baseUrl) say(`  入口已指回代理：${back.baseUrl}`)
+      } else {
+        say('  只启动代理，没有改 settings（watchSettings=false，入口归别的工具管）')
+      }
       return 0
     }
   }
