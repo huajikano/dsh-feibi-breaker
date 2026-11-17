@@ -243,11 +243,25 @@ export function createProxy(config, options = {}) {
   const stats = createStats({ home, config })
   const judgeOpts = judgeOptions(config)
 
-  const base = new URL(config.upstream)
-  const isSecure = base.protocol === 'https:'
-  const transport = isSecure ? https : http
-  const agent = new transport.Agent({ keepAlive: true, maxSockets: 64 })
-  const basePath = base.pathname.replace(/\/+$/, '')
+  // 两个协议各留一个长连接池。上游地址**不能在启动时钉死**：面板和 CLI 都支持
+  // 运行中改 upstream，钉死了就会变成"改了没反应、重启才好"。
+  const agents = {
+    'http:': new http.Agent({ keepAlive: true, maxSockets: 64 }),
+    'https:': new https.Agent({ keepAlive: true, maxSockets: 64 }),
+  }
+
+  /** 每次请求重新读 config.upstream，改完立刻生效。 */
+  function resolveUpstream() {
+    const base = new URL(config.upstream)
+    const isSecure = base.protocol === 'https:'
+    return {
+      base,
+      isSecure,
+      transport: isSecure ? https : http,
+      agent: agents[isSecure ? 'https:' : 'http:'],
+      pathPrefix: base.pathname.replace(/\/+$/, ''),
+    }
+  }
 
   /**
    * 发一次上游请求。
@@ -257,7 +271,8 @@ export function createProxy(config, options = {}) {
    * @returns {Promise<import('node:http').IncomingMessage>} 上游响应。
    */
   function sendUpstream(req, bodyText) {
-    const target = basePath.length > 0 ? `${basePath}${req.url}` : req.url
+    const up = resolveUpstream()
+    const target = up.pathPrefix.length > 0 ? `${up.pathPrefix}${req.url}` : req.url
     const payload = Buffer.from(bodyText, 'utf8')
     const headers = {}
     for (const [key, value] of Object.entries(req.headers)) {
@@ -279,15 +294,25 @@ export function createProxy(config, options = {}) {
       headers['x-api-key'] = authorization.slice(7).trim()
     }
 
+    // 直连模式下以 config.direct.key 为准：客户端 env 只在启动时读一次，
+    // 换 key 后它还在发旧 key，上游一律 401，看起来就像"直连没效果"。
+    const directKey = config.direct && typeof config.direct.key === 'string' ? config.direct.key : ''
+    if (directKey.length > 0) {
+      delete headers.authorization
+      delete headers.Authorization
+      headers['x-api-key'] = directKey
+      headers.authorization = `Bearer ${directKey}`
+    }
+
     return new Promise((resolve, reject) => {
-      const request = transport.request({
-        protocol: base.protocol,
-        hostname: base.hostname,
-        port: base.port || (isSecure ? 443 : 80),
+      const request = up.transport.request({
+        protocol: up.base.protocol,
+        hostname: up.base.hostname,
+        port: up.base.port || (up.isSecure ? 443 : 80),
         method: req.method,
         path: target,
         headers,
-        agent,
+        agent: up.agent,
         timeout: 15 * 60 * 1000,
       }, resolve)
       request.on('timeout', () => {
@@ -565,13 +590,6 @@ export function createProxy(config, options = {}) {
       return
     }
 
-    // 辅助请求（压缩、起标题、审查）原样放行。改写它们会把功能弄坏，
-    // 而它们本来也不是用户要的那句话。
-    if (isAuxiliary(config.skipBodyPatterns, bodyText)) {
-      await relayRaw(req, res, bodyText)
-      return
-    }
-
     const protocol = protocolOf(pathname)
     let body = null
     try {
@@ -586,34 +604,37 @@ export function createProxy(config, options = {}) {
       return
     }
 
+    /**
+     * 模型名改写要在**分流之前**做。
+     *
+     * 真机踩过：辅助请求（起标题、压缩摘要）走 relayRaw 原样转发，跳过了
+     * forceModel；它们照样带 claude-sonnet-5 这种名字，而上游分组只有 DeepSeek，
+     * 直接 404 model_not_found —— Claude Code 把这条 404 显示成
+     * "There's an issue with the selected model"，用户看到的就是"会话用不了了"。
+     */
+    if (typeof config.forceModel === 'string' && config.forceModel.length > 0 && body.model !== config.forceModel) {
+      const from = body.model
+      body.model = config.forceModel
+      stats.record({ kind: 'model', protocol, path: pathname, from, to: config.forceModel })
+      bodyText = JSON.stringify(body)
+    }
+
+    // 辅助请求（压缩、起标题、审查）：模型名已改好，其余原样放行。
+    // 改写它们的内容会把功能弄坏，而它们本来也不是用户要的那句话。
+    if (isAuxiliary(config.skipBodyPatterns, bodyText)) {
+      await relayRaw(req, res, bodyText)
+      return
+    }
+
+    // token 计数：只改模型名，不注入规则。
+    // 注入会把 4.4KB 载荷算进上下文估算，Claude Code 会因此提前触发自动压缩。
+    if (pathname.endsWith('/count_tokens')) {
+      await relayRaw(req, res, bodyText)
+      return
+    }
+
     const model = modelOf(body)
     const baseBody = body
-
-    // 强制模型名：桌面版直接指过来时，它发的 `claude-sonnet-5` 第三方上游不认。
-    // 放在注入之前改，后面所有分支（首发/重试/自检）都用同一个名字。
-    if (typeof config.forceModel === 'string' && config.forceModel.length > 0 && baseBody.model !== config.forceModel) {
-      const from = baseBody.model
-      baseBody.model = config.forceModel
-      stats.record({ kind: 'model', protocol, path: pathname, from, to: config.forceModel })
-    }
-
-    // 诊断：把真实请求的 system 开头落盘。改身份句之前必须知道真实文本长什么样，
-    // 猜句式是最浪费时间的做法。
-    if (process.env.FEIBI_DUMP === '1') {
-      try {
-        const blocks = typeof baseBody.system === 'string'
-          ? [{ type: 'text', text: baseBody.system }]
-          : (Array.isArray(baseBody.system) ? baseBody.system : [])
-        fs.mkdirSync(feibiPaths(home).root, { recursive: true })
-        fs.writeFileSync(feibiPaths(home).root + '/dump.json', JSON.stringify({
-          at: new Date().toISOString(),
-          blocks: blocks.length,
-          heads: blocks.slice(0, 3).map((b) => String(b?.text ?? '').slice(0, 600)),
-        }, null, 2), 'utf8')
-      } catch {
-        // 诊断写不进去不影响转发。
-      }
-    }
 
     if (config.inject !== false) {
       try {
@@ -749,7 +770,8 @@ export function createProxy(config, options = {}) {
         } catch {
           // 老版本 Node 没有这个方法，退化成等超时。
         }
-        agent.destroy()
+        agents['http:'].destroy()
+        agents['https:'].destroy()
         server.close(() => resolve())
       })
     },
