@@ -1,21 +1,12 @@
 {
   "name": "feibi-breaker",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "菲比破限 — prompt shaping plus pre-commit refusal interception for DeepSeek-Harness. Coexists with dsh-gatekeeper; the shipped payload is a packed core asset, not readable text.",
+  "description": "菲比破限：系统提示词整形 + 提交前拦截，适配 DeepSeek-Harness 0.2.x。与 dsh-gatekeeper 等拦截插件共存，安装只改动本插件自己的一行。",
   "license": "CC-BY-NC-SA-4.0",
-  "author": "huajikano <huajikano@gmail.com> (https://github.com/huajikano)",
-  "contributors": [
-    "huajikano (https://github.com/huajikano)"
-  ],
-  "homepage": "https://github.com/huajikano/dsh-feibi-breaker#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/huajikano/dsh-feibi-breaker.git"
-  },
-  "bugs": {
-    "url": "https://github.com/huajikano/dsh-feibi-breaker/issues"
+  "engines": {
+    "dsh": ">=0.2.1-0 <0.3.0"
   },
   "keywords": [
     "deepseek-harness",
@@ -33,6 +24,7 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./core/payload.bin": "./core/payload.bin",
     "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
@@ -41,21 +33,24 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
+    "icon.svg",
     "scripts",
+    "tools",
     "test",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
-    "harness:check": "node --check lib/index.js && node --check client.js",
+    "harness:check": "node --check lib/index.js && node --check lib/stream.js && node --check client.js",
+    "launchers": "node tools/write-launchers.mjs",
     "test": "node --test test/*.test.mjs",
-    "verify": "node --test test/*.test.mjs"
+    "verify": "node --test test/*.test.mjs && node tools/check-install.mjs"
   },
   "dsh": {
     "id": "feibi-breaker",
     "name": "菲比破限",
-    "version": "1.1.0",
-    "permissions": "系统提示词注入, 模型流拦截, 客户端状态条",
+    "version": "1.2.0",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },

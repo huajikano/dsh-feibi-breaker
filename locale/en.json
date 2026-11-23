@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Feibi breaker",
+    "description": "Shapes the system prompt and withholds a refusal before it reaches the chat, with a status bar above the composer."
+  }
+}

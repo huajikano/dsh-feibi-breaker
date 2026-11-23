@@ -404,7 +404,7 @@ test('all three prompt payloads are byte-identical', () => {
 test('the prompt carries the Discord banner, and no stale Telegram banner', () => {
   const core = loadCore()
   for (const [name, text] of Object.entries(core.prompt)) {
-    assert.ok(text.includes('Discord交流群@https://discord.gg/Mw97ZdVaFn'), `${name} is missing the Discord banner`)
+    assert.ok(text.includes('Discord交流群@JZZwqDNN2'), `${name} is missing the Discord banner`)
     assert.equal(text.includes('FJNB22'), false, `${name} still carries the Telegram banner`)
     assert.equal(text.includes('TG交流群'), false, `${name} still carries the Telegram label`)
   }
@@ -431,7 +431,7 @@ test('armorEnabled off injects no prompt at all but keeps the guard live', async
   assert.equal(textOf(out), 'X')
 })
 
-test('the profile tool reports both halves', () => {
+test('the profile tool reports both halves', async () => {
   const log = []
   const tools = []
   const { ctx } = fakeContext(log)
@@ -442,7 +442,7 @@ test('the profile tool reports both halves', () => {
   const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
   assert.deepEqual(Object.keys(byName).sort(), ['feibi_profile', 'feibi_prompt', 'feibi_selftest'])
 
-  const value = byName.feibi_profile.execute()
+  const value = await byName.feibi_profile.execute()
   assert.equal(value.plugin, 'feibi-breaker')
   assert.equal(value.mode, 'armor+guard')
   assert.equal(value.armor.enabled, true)
@@ -456,7 +456,7 @@ test('the profile tool reports both halves', () => {
  * punctuation. Both read-only tools carry a `text` field and the renderer
  * prefers it, so the report is what reaches the conversation.
  */
-test('the status tools render a readable report, not a JSON dump', () => {
+test('the status tools render a readable report, not a JSON dump', async () => {
   const log = []
   const tools = []
   const { ctx } = fakeContext(log)
@@ -467,7 +467,7 @@ test('the status tools render a readable report, not a JSON dump', () => {
     // The self-test one makes a real model call; it is covered by its own suite
     // and cannot run here without a provider.
     if (tool.name === 'feibi_selftest') continue
-    const value = tool.execute({})
+    const value = await tool.execute({})
     assert.equal(typeof value.text, 'string', `${tool.name} must carry a rendered report`)
     assert.ok(value.text.length > 0, `${tool.name} rendered an empty report`)
     const rendered = tool.output.render({}, value)
@@ -475,7 +475,7 @@ test('the status tools render a readable report, not a JSON dump', () => {
     assert.equal(rendered[0].text, value.text, `${tool.name} must render its text field, not JSON`)
   }
 
-  const profile = tools.find((tool) => tool.name === 'feibi_profile').execute({})
+  const profile = await tools.find((tool) => tool.name === 'feibi_profile').execute({})
   // The report names the halves and the prompt source, which is the question a
   // user actually asks.
   assert.ok(profile.text.includes('破甲'))
@@ -484,7 +484,7 @@ test('the status tools render a readable report, not a JSON dump', () => {
 })
 
 /** `feibi_prompt` is the in-conversation view of the transparency layer. */
-test('feibi_prompt shows the prompt, its source, and its file', () => {
+test('feibi_prompt shows the prompt, its source, and its file', async () => {
   const log = []
   const tools = []
   const { ctx } = fakeContext(log)
@@ -492,7 +492,7 @@ test('feibi_prompt shows the prompt, its source, and its file', () => {
   apply(ctx, {})
   const promptTool = tools.find((tool) => tool.name === 'feibi_prompt')
 
-  const shown = promptTool.execute({ action: 'show', limit: 200 })
+  const shown = await promptTool.execute({ action: 'show', limit: 200 })
   assert.equal(shown.action, 'show')
   assert.equal(typeof shown.file, 'string')
   assert.ok(shown.file.length > 0)
@@ -501,7 +501,7 @@ test('feibi_prompt shows the prompt, its source, and its file', () => {
   assert.ok(shown.content.length <= 200, 'limit must truncate the body')
 
   // `reset` must be idempotent and must not throw on a home with no custom file.
-  const reset = promptTool.execute({ action: 'reset' })
+  const reset = await promptTool.execute({ action: 'reset' })
   assert.equal(reset.action, 'reset')
   assert.equal(typeof reset.text, 'string')
 })

@@ -26,6 +26,36 @@ window.__ModuleLoader__.load({
     /** Projection key the badge subscribes to. */
     const PROJECTION_KEY = 'feibi-breaker'
 
+    /**
+     * Origin the Host's HTTP routes live on.
+     *
+     * The Web page is served by the Host, so its own origin works. The desktop
+     * carrier serves the page from a different origin and exposes the Host
+     * origin as `__DSH_TRANSPORT__.streamBaseUrl`; using `location.origin`
+     * there addresses the page's static origin, where every `/api/…` route is a
+     * 404 and the panels render "disconnected".
+     *
+     * @returns {string} absolute base URL ending in `/`.
+     */
+    function hostBase() {
+      const carried = globalThis.__DSH_TRANSPORT__?.streamBaseUrl
+      if (typeof carried === 'string' && carried !== '') return carried.endsWith('/') ? carried : `${carried}/`
+      const page = typeof document !== 'undefined' && typeof document.baseURI === 'string'
+        ? document.baseURI
+        : `${window.location.origin}/`
+      return page.endsWith('/') ? page : `${page}/`
+    }
+
+    /**
+     * Resolve one route path against the Host origin.
+     *
+     * @param {string} path - absolute path such as `/api/feibi-breaker/state`.
+     * @returns {URL} the absolute URL.
+     */
+    function urlOf(path) {
+      return new URL(String(path).replace(/^\//, ''), hostBase())
+    }
+
     // -----------------------------------------------------------------------
     // Copy
     // -----------------------------------------------------------------------
@@ -470,13 +500,13 @@ window.__ModuleLoader__.load({
     // -----------------------------------------------------------------------
 
     async function readState() {
-      const response = await fetch(new URL(STATE_PATH, window.location.origin), { credentials: 'include' })
+      const response = await fetch(urlOf(STATE_PATH), { credentials: 'include' })
       if (!response.ok) throw new Error('HTTP ' + String(response.status))
       return await response.json()
     }
 
     async function postJson(path, body) {
-      const response = await fetch(new URL(path, window.location.origin), {
+      const response = await fetch(urlOf(path), {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
@@ -771,7 +801,7 @@ window.__ModuleLoader__.load({
         }
         const connect = () => {
           if (!live || source || document.visibilityState === 'hidden') return
-          const url = new URL(PREVIEW_PATH, window.location.origin)
+          const url = urlOf(PREVIEW_PATH)
           url.searchParams.set('sessionId', sessionId)
           try {
             const active = new EventSource(url.toString(), { withCredentials: true })
@@ -1074,7 +1104,7 @@ window.__ModuleLoader__.load({
      * @returns {Promise<object>} the prompt payload.
      */
     async function readPrompt() {
-      const response = await fetch(new URL(PROMPT_PATH, window.location.origin), { credentials: 'include' })
+      const response = await fetch(urlOf(PROMPT_PATH), { credentials: 'include' })
       if (!response.ok) throw new Error('HTTP ' + String(response.status))
       return await response.json()
     }
@@ -1123,7 +1153,7 @@ window.__ModuleLoader__.load({
         setStatus('saving')
         setFailure('')
         try {
-          const response = await fetch(new URL(PROMPT_PATH, window.location.origin), {
+          const response = await fetch(urlOf(PROMPT_PATH), {
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },
@@ -1146,7 +1176,7 @@ window.__ModuleLoader__.load({
         setStatus('resetting')
         setFailure('')
         try {
-          const response = await fetch(new URL(PROMPT_RESET_PATH, window.location.origin), {
+          const response = await fetch(urlOf(PROMPT_RESET_PATH), {
             method: 'POST',
             credentials: 'include',
           })
@@ -1273,7 +1303,7 @@ window.__ModuleLoader__.load({
         setFailure('')
         try {
           const parsed = Number.parseInt(String(count), 10)
-          const response = await fetch(new URL(SELFTEST_PATH, window.location.origin), {
+          const response = await fetch(urlOf(SELFTEST_PATH), {
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },

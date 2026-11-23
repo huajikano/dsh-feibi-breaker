@@ -152,8 +152,8 @@ function fakeContext() {
         return () => {}
       },
     },
-    fire(event, payload) {
-      for (const handler of listeners.get(event) ?? []) handler(payload)
+    fire(event, ...args) {
+      for (const handler of listeners.get(event) ?? []) handler(...args)
     },
     has: (event) => listeners.has(event),
   }
@@ -224,11 +224,29 @@ test('a user message resets the budget', () => {
   fire('agent/status', { agent })
   assert.equal(sent.length, 1, 'max=1 means one correction')
 
-  // The user speaks; the next block gets a correction again.
-  fire('user/message', { sessionId: 's1' })
+  // The user speaks; the next block gets a correction again. A user message is
+  // a *session* event in DSH 0.2.x, not a host event on its own name.
+  fire('session/event', { id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' } } })
   bus.publish('s1', { verdict: 'blocked', blocked: true, reason: 'y' })
   fire('agent/status', { agent })
   assert.equal(sent.length, 2)
+})
+
+test('a correction message does not reset the budget it is answering', () => {
+  const { ctx, fire } = fakeContext()
+  const bus = createVerdictBus()
+  const sent = []
+  const installed = installRefusalRetry(ctx, { autoRetry: true }, bus, { max: 1 })
+
+  const agent = { status: 'idle', session: { id: 's1' }, followup: (m) => sent.push(m) }
+  bus.publish('s1', { verdict: 'blocked', blocked: true, reason: 'x' })
+  fire('agent/status', { agent })
+  assert.equal(sent.length, 1)
+
+  // The correction this layer sent is itself a user message. Treating it as a
+  // fresh user turn would re-arm the budget and loop until the cap.
+  fire('session/event', { id: 's1' }, { type: 'user/message', data: { source: { kind: 'feibi-breaker' } } })
+  assert.equal(installed.tracker.read('s1').retries, 1)
 })
 
 test('a passing reply is never corrected', () => {
